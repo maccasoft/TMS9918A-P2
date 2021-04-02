@@ -1,0 +1,384 @@
+{
+    TMS9918 Renderer Example
+    Written by Marco Maccaferri <macca@maccasoft.com>
+}
+CON
+    _clkfreq    = 160_000_000
+
+VAR
+
+    byte bitmap[320 * 240]
+
+PUB main() | cog, bmpa
+
+    debug(`BITMAP TMS9918 POS 50 50 SIZE 320 240 DOTSIZE 2 LUT8 LONGS_8BIT)
+    debug(`TMS9918 LUTCOLORS $00_00_00 $00_00_00 $20_C0_20 $60_E0_60 $20_20_E0 $40_60_E0 $A0_20_20 $40_C0_E0 $E0_20_20 $E0_60_60 $C0_C0_20 $C0_C0_80 $20_80_20 $C0_40_A0 $A0_A0_A0 $E0_E0_E0)
+
+    'bytefill(@bitmap, $00, 320 * 240)
+
+    _regs := @tms9918_regs
+    _vram := @tms9918_vram
+    _bitmap := @bitmap
+    cog := coginit(16, @driver, 0)
+    repeat until cogchk(cog) == 0
+
+    debug(`TMS9918 SET 0 0)
+    bmpa := @bitmap
+    repeat 60
+        repeat 320
+            debug(`TMS9918 `UHEX_(long[bmpa]))
+            bmpa += 4
+            waitms(1)
+
+    repeat
+
+DAT
+
+                orgh
+
+tms9918_regs
+'                file    "tms9918_ascii.regs"
+'                file    "tms9918_nyan.regs"
+'                file    "tms9918_mandel.regs"
+                file    "tms9918_bombjack.regs"
+
+tms9918_vram
+'                file    "tms9918_ascii.vram"
+'                file    "tms9918_nyan.vram"
+'                file    "tms9918_mandel.vram"
+                file    "tms9918_bombjack.vram"
+
+DAT
+
+                org     $000
+
+driver
+.frame
+                mov     ptrb, _bitmap
+                add     ptrb, ##(240-192)/2*320+(320-256)/2
+
+                mov     scnt, #0
+.scanline       call    #render
+                add     ptrb, #320
+                add     scnt, #1
+                cmp     scnt, #192 wc
+    if_c        jmp     #.scanline
+
+                cogid   a
+                cogstop a
+
+render
+                mov     ptra, _regs
+                rdbyte  regs+0, ptra++
+                rdbyte  regs+1, ptra++
+
+                test    regs+0, #TMSMODE3    wz ' graphics mode II
+
+                rdbyte  regs+2, ptra++
+                shl     regs+2, #10             ' name table base address * $400
+                rdbyte  regs+3, ptra++
+                shl     regs+3, #6              ' color table base address * $40
+    if_nz       andn    regs+3, vdp_8k_mask     ' limit color table to 8k boundaries
+                rdbyte  regs+4, ptra++
+                shl     regs+4, #11             ' pattern generator base address * $800
+    if_nz       andn    regs+4, vdp_8k_mask     ' limit pattern table to 8k boundaries
+                rdbyte  regs+5, ptra++
+                shl     regs+5, #7              ' sprite attribute table base address * $80
+                rdbyte  regs+6, ptra++
+                shl     regs+6, #11             ' sprite pattern generator base address * $800
+
+                rdbyte  regs+7, ptra++
+
+                add     regs+2, _vram
+                add     regs+3, _vram
+                add     regs+4, _vram
+                add     regs+5, _vram
+                add     regs+6, _vram
+
+                test    regs+1, #TMSMODE2    wz ' multicolor mode
+    if_nz       jmp     #multicolor_mode
+
+                mov     a, scnt                 ' row offset into pattern generator
+                and     a, #7
+
+                test    regs+0, #TMSMODE3    wz ' graphics mode II
+    if_nz       mov     b, scnt
+    if_nz       shr     b, #6                   ' divide by 64 (8 rows by 8 pixels)
+    if_nz       shl     b, #11                  ' multiply by 2048
+    if_nz       add     a, b
+
+    if_nz       add     regs+3, a               ' row offset into color table
+                add     regs+4, a
+
+                test    regs+1, #TMSMODE1    wz ' text mode
+
+                mov     a, scnt
+                andn    a, #$07                 ' divide and multiply by 8
+                mov     b, a
+                shl     a, #2                   ' multiply by 32
+    if_nz       add     a, b                    ' multiply by 40
+                add     regs+2, a
+
+    if_z        jmp     #graphics_mode
+
+text_mode
+                mov     c0, regs+7              ' background color
+                and     c0, #$0F
+                mov     c1, regs+7              ' foreground color
+                shr     c1, #4
+
+                mov     ptra, ptrb
+                add     ptra, #8                ' skip 8 pixels
+                mov     ecnt, #40
+
+.loop           rdbyte  ptrc, regs+2            ' read tile number to display
+                shl     ptrc, #3                ' 8 bytes per tile
+                add     ptrc, regs+4
+                rdbyte  a, ptrc                 ' pixels, 1 bit per pixel, from msb
+
+                test    a, #%100000_00  wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%010000_00  wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%001000_00  wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%000100_00  wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%000010_00  wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%000001_00  wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+
+                add     regs+2, #1
+                djnz    ecnt, #.loop
+
+                ret
+
+multicolor_mode
+                mov     a, scnt
+                shr     a, #2
+                and     a, #$07
+                add     regs+4, a
+
+                mov     a, scnt
+                andn    a, #$07                 ' divide and multiply by 8
+                shl     a, #2                   ' multiply by 32
+                add     regs+2, a
+
+                mov     ptra, ptrb
+                mov     ecnt, #32
+
+.loop           rdbyte  ptrc, regs+2            ' read tile number to display
+                shl     ptrc, #3
+                add     ptrc, regs+4            ' points to color table
+
+                rdbyte  c0, ptrc                 ' colors
+
+                mov     c1, c0
+                and     c1, #$0F
+                shr     c0, #4
+
+                wrbyte  c0, ptra++
+                wrbyte  c0, ptra++
+                wrbyte  c0, ptra++
+                wrbyte  c0, ptra++
+                wrbyte  c1, ptra++
+                wrbyte  c1, ptra++
+                wrbyte  c1, ptra++
+                wrbyte  c1, ptra++
+
+                add     regs+2, #1
+                djnz    ecnt, #.loop
+
+                jmp     #sprites
+
+graphics_mode
+                mov     ptra, ptrb
+                mov     ecnt, #32
+
+.loop           rdbyte  ptrc, regs+2            ' read tile number to display
+                add     regs+2, #1
+
+                mov     ptrd, ptrc
+                test    regs+0, #TMSMODE3 wz    ' graphics mode II
+        if_nz   shl     ptrd, #3
+        if_z    shr     ptrd, #3
+                add     ptrd, regs+3            ' points to color table
+                rdbyte  a, ptrd                 ' colors
+
+                mov     c0, a
+                and     c0, #$0F wz
+    if_z        setnib  c0, regs+7, #0
+                mov     c1, a
+                shr     c1, #4 wz
+    if_z        setnib  c1, regs+7, #0
+
+                shl     ptrc, #3                ' 8 bytes per tile
+                add     ptrc, regs+4
+                rdbyte  a, ptrc                 ' pixels, 1 bit per pixel, from msb
+
+                test    a, #%10000000   wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%01000000   wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%00100000   wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%00010000   wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%00001000   wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%00000100   wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%00000010   wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+                test    a, #%00000001   wz
+    if_nz       wrbyte  c1, ptra++
+    if_z        wrbyte  c0, ptra++
+
+                djnz    ecnt, #.loop
+
+                ' fall through
+
+sprites
+                mov     lcnt, #4
+                mov     ccnt, #TMSSPRITES
+
+                mov     b, #8
+                test    regs+1, #TMSSPRSIZE wz
+    if_nz       shl     b, #1
+                test    regs+1, #TMSSPRMAG  wz
+    if_nz       shl     b, #1
+
+.loop           rdlong  sprt, regs+5
+
+                test    sprt, TMSSPRCOLOR wz    ' check sprite color
+    if_z        jmp     #.next                  ' skip if transparent
+
+                mov     y, sprt
+                shl     y, #24
+                sar     y, #24                  ' sign-extend y
+                cmps    y, neg_clip wc
+    if_c        and     y, #$FF                 ' max -32
+                cmp     y, #$D0 wz              ' end of sprites processing
+    if_z        ret
+
+                mov     a, scnt                 ' check sprite scanline visibility
+                subs    a, y wc
+    if_c        jmp     #.next
+                cmp     a, b wc
+    if_nc       jmp     #.next
+
+                mov     ptrc, sprt
+                shr     ptrc, #16
+                and     ptrc, #$FF
+                shl     ptrc, #3
+                add     ptrc, regs+6
+                test    regs+1, #TMSSPRMAG  wz
+    if_nz       shr     a, #1
+                add     ptrc, a
+
+                mov     c1, sprt                ' set pixel color
+                shr     c1, #24
+                and     c1, #$0F            wz
+    if_z        setnib  c1, regs+7, #0
+
+                mov     x, sprt
+                shr     x, #8
+                and     x, #$FF
+                test    sprt, TMSEARLYCLK   wz
+    if_nz       sub     x, #32
+                mov     ptra, ptrb
+                add     ptra, x
+
+                test    regs+1, #TMSSPRSIZE wz
+    if_z        mov     ecnt, #8
+    if_nz       mov     ecnt, #16
+
+                rdbyte  c0, ptrc
+    if_nz       shl     c0, #8
+    if_nz       add     ptrc, #16
+    if_nz       rdbyte  a, ptrc
+    if_nz       or      c0, a
+                mov     a, #$80
+    if_nz       shl     a, #8
+
+                test    regs+1, #TMSSPRMAG  wz
+.draw           cmps    x, #0           wc
+    if_c        jmp     #.l1
+                cmps    x, #256         wc
+    if_nc       jmp     #.next
+                test    c0, a           wc
+    if_c        wrbyte  c1, ptra
+                add     ptra, #1
+    if_c_and_nz wrbyte  c1, ptra
+    if_nz       add     ptra, #1
+.l1             shr     a, #1
+                add     x, #1
+                djnz    ecnt, #.draw
+
+.next           add     regs+5, #4
+                djnz    ccnt, #.loop
+
+                ret
+
+_regs           long    0
+_vram           long    0
+_bitmap         long    0
+
+vdp_8k_mask     long    $1FFF
+neg_clip        long    -32
+
+TMSEARLYCLK     long    %10000000_00000000_00000000_00000000
+TMSSPRCOLOR     long    %00001111_00000000_00000000_00000000
+
+a               res     1
+b               res     1
+x               res     1
+y               res     1
+
+scnt            res     1
+ccnt            res     1
+lcnt            res     1
+ecnt            res     1
+
+c0              res     1
+c1              res     1
+sprt            res     1
+
+ptrc            res     1
+ptrd            res     1
+
+regs            res     8
+
+                fit     $1F0
+
+CON
+
+    TMSMODE3   = %00000010      ' mode bit 3
+    TMSEXTVID  = %00000001      ' external video
+
+    ' register 1 control bits
+    TMS4K16K   = %10000000      ' 4/16K RAM
+    TMSBLANK   = %01000000      ' screen blank
+    TMSINTEN   = %00100000      ' interrupt enable
+    TMSMODE1   = %00010000      ' mode bit 1
+    TMSMODE2   = %00001000      ' mode bit 2
+    TMSSPRSIZE = %00000010      ' sprite size
+    TMSSPRMAG  = %00000001      ' sprite magnification
+
+    TMSVSYNC   = %10000000      ' framce sync
+
+    TMSSPRITES = 32
