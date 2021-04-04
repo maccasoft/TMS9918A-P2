@@ -4,15 +4,23 @@
 }
 CON
     _clkfreq    = 160_000_000
+    video_pin   = 32+7*3 addpins 1
 
 VAR
 
-    byte bitmap[320 * 240]
+    byte bitmap[256 * 192]
+
+OBJ
+
+    video : "tms9918_cvbs"
 
 PUB main() | cog, bmpa
 
     debug(`BITMAP TMS9918 POS 50 50 SIZE 320 240 DOTSIZE 2 LUT8 LONGS_8BIT)
     debug(`TMS9918 LUTCOLORS $00_00_00 $00_00_00 $20_C0_20 $60_E0_60 $20_20_E0 $40_60_E0 $A0_20_20 $40_C0_E0 $E0_20_20 $E0_60_60 $C0_C0_20 $C0_C0_80 $20_80_20 $C0_40_A0 $A0_A0_A0 $E0_E0_E0)
+
+    video.start(0, 360, @bitmap, video_pin)     ' NTSC
+    'video.start(1, 410, @bitmap, video_pin)     ' PAL
 
     'bytefill(@bitmap, $00, 320 * 240)
 
@@ -24,11 +32,23 @@ PUB main() | cog, bmpa
 
     debug(`TMS9918 SET 0 0)
     bmpa := @bitmap
-    repeat 60
-        repeat 320
+    repeat 24
+        repeat 80
+            debug(`TMS9918 `UHEX_(0))
+        'waitms(1)
+    repeat 192
+        repeat 8
+            debug(`TMS9918 `UHEX_(0))
+        repeat 64
             debug(`TMS9918 `UHEX_(long[bmpa]))
             bmpa += 4
-            waitms(1)
+        repeat 8
+            debug(`TMS9918 `UHEX_(0))
+        'waitms(1)
+    repeat 24
+        repeat 80
+            debug(`TMS9918 `UHEX_(0))
+        'waitms(1)
 
     repeat
 
@@ -55,11 +75,10 @@ DAT
 driver
 .frame
                 mov     ptrb, _bitmap
-                add     ptrb, ##(240-192)/2*320+(320-256)/2
 
                 mov     scnt, #0
 .scanline       call    #render
-                add     ptrb, #320
+                add     ptrb, #256
                 add     scnt, #1
                 cmp     scnt, #192 wc
     if_c        jmp     #.scanline
@@ -95,6 +114,8 @@ render
                 add     regs+5, _vram
                 add     regs+6, _vram
 
+                mov     ptra, ptrb
+
                 test    regs+1, #TMSMODE2    wz ' multicolor mode
     if_nz       jmp     #multicolor_mode
 
@@ -122,10 +143,11 @@ render
     if_z        jmp     #graphics_mode
 
 text_mode
-                mov     c0, regs+7              ' background color
-                and     c0, #$0F
-                mov     c1, regs+7              ' foreground color
-                shr     c1, #4
+                mov     ctmp, regs+7            ' background color
+                and     ctmp, #$0F
+                mov     a, regs+7               ' foreground color
+                shr     a, #4
+                setbyte ctmp, a, #1
 
                 mov     ptra, ptrb
                 add     ptra, #8                ' skip 8 pixels
@@ -136,24 +158,16 @@ text_mode
                 add     ptrc, regs+4
                 rdbyte  a, ptrc                 ' pixels, 1 bit per pixel, from msb
 
-                test    a, #%100000_00  wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%010000_00  wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%001000_00  wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%000100_00  wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%000010_00  wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%000001_00  wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
+                rev     a
+                shr     a, #24
+                mergew  a
+                mov     cbuf+0, ctmp
+                movbyts cbuf+0, a
+                wrlong  cbuf+0, ptra++
+                shr     a, #8
+                mov     cbuf+1, ctmp
+                movbyts cbuf+1, a
+                wrword  cbuf+1, ptra++
 
                 add     regs+2, #1
                 djnz    ecnt, #.loop
@@ -171,27 +185,24 @@ multicolor_mode
                 shl     a, #2                   ' multiply by 32
                 add     regs+2, a
 
-                mov     ptra, ptrb
                 mov     ecnt, #32
 
 .loop           rdbyte  ptrc, regs+2            ' read tile number to display
                 shl     ptrc, #3
                 add     ptrc, regs+4            ' points to color table
 
-                rdbyte  c0, ptrc                 ' colors
+                rdbyte  cbuf+0, ptrc                 ' colors
 
-                mov     c1, c0
-                and     c1, #$0F
-                shr     c0, #4
+                mov     cbuf+1, cbuf+0
+                and     cbuf+1, #$0F wz
+    if_z        setnib  cbuf+1, regs+7, #0
+                shr     cbuf+0, #4   wz
+    if_z        setnib  cbuf+0, regs+7, #0
 
-                wrbyte  c0, ptra++
-                wrbyte  c0, ptra++
-                wrbyte  c0, ptra++
-                wrbyte  c0, ptra++
-                wrbyte  c1, ptra++
-                wrbyte  c1, ptra++
-                wrbyte  c1, ptra++
-                wrbyte  c1, ptra++
+                movbyts cbuf+0, #%%0000
+                wrlong  cbuf+0, ptra++
+                movbyts cbuf+1, #%%0000
+                wrlong  cbuf+1, ptra++
 
                 add     regs+2, #1
                 djnz    ecnt, #.loop
@@ -199,7 +210,6 @@ multicolor_mode
                 jmp     #sprites
 
 graphics_mode
-                mov     ptra, ptrb
                 mov     ecnt, #32
 
 .loop           rdbyte  ptrc, regs+2            ' read tile number to display
@@ -212,41 +222,28 @@ graphics_mode
                 add     ptrd, regs+3            ' points to color table
                 rdbyte  a, ptrd                 ' colors
 
-                mov     c0, a
-                and     c0, #$0F wz
-    if_z        setnib  c0, regs+7, #0
-                mov     c1, a
-                shr     c1, #4 wz
-    if_z        setnib  c1, regs+7, #0
+                mov     cbuf+0, a
+                and     cbuf+0, #$0F wz
+    if_z        setnib  cbuf+0, regs+7, #0
+                mov     cbuf+1, a
+                shr     cbuf+1, #4 wz
+    if_z        setnib  cbuf+1, regs+7, #0
+
+                setbyte cbuf+0, cbuf+1, #1
+                mov     cbuf+1, cbuf+0
 
                 shl     ptrc, #3                ' 8 bytes per tile
                 add     ptrc, regs+4
                 rdbyte  a, ptrc                 ' pixels, 1 bit per pixel, from msb
 
-                test    a, #%10000000   wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%01000000   wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%00100000   wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%00010000   wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%00001000   wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%00000100   wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%00000010   wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
-                test    a, #%00000001   wz
-    if_nz       wrbyte  c1, ptra++
-    if_z        wrbyte  c0, ptra++
+                rev     a
+                shr     a, #24
+                mergew  a
+                movbyts cbuf+0, a
+                wrlong  cbuf+0, ptra++
+                shr     a, #8
+                movbyts cbuf+1, a
+                wrlong  cbuf+1, ptra++
 
                 djnz    ecnt, #.loop
 
@@ -290,10 +287,10 @@ sprites
     if_nz       shr     a, #1
                 add     ptrc, a
 
-                mov     c1, sprt                ' set pixel color
-                shr     c1, #24
-                and     c1, #$0F            wz
-    if_z        setnib  c1, regs+7, #0
+                mov     ctmp, sprt                ' set pixel color
+                shr     ctmp, #24
+                and     ctmp, #$0F          wz
+    if_z        setnib  ctmp, regs+7, #0
 
                 mov     x, sprt
                 shr     x, #8
@@ -307,27 +304,33 @@ sprites
     if_z        mov     ecnt, #8
     if_nz       mov     ecnt, #16
 
-                rdbyte  c0, ptrc
-    if_nz       shl     c0, #8
+                rdbyte  sprt, ptrc
+    if_nz       shl     sprt, #8
     if_nz       add     ptrc, #16
     if_nz       rdbyte  a, ptrc
-    if_nz       or      c0, a
+    if_nz       or      sprt, a
+
                 mov     a, #$80
     if_nz       shl     a, #8
 
                 test    regs+1, #TMSSPRMAG  wz
-.draw           cmps    x, #0           wc
+
+                rep     @.end_draw, ecnt
+.draw           cmps    x, #0       wc
     if_c        jmp     #.l1
-                cmps    x, #256         wc
+                cmps    x, #256     wc
     if_nc       jmp     #.next
-                test    c0, a           wc
-    if_c        wrbyte  c1, ptra
+                test    sprt, a     wc
+    if_c        wrbyte  ctmp, ptra
                 add     ptra, #1
-    if_c_and_nz wrbyte  c1, ptra
+    if_c_and_nz wrbyte  ctmp, ptra
     if_nz       add     ptra, #1
 .l1             shr     a, #1
                 add     x, #1
-                djnz    ecnt, #.draw
+.end_draw
+
+                sub     lcnt, #1    wz
+    if_z        ret
 
 .next           add     regs+5, #4
                 djnz    ccnt, #.loop
@@ -354,8 +357,11 @@ ccnt            res     1
 lcnt            res     1
 ecnt            res     1
 
-c0              res     1
-c1              res     1
+ctmp            res     1
+cbuf            res     4
+
+'c0              res     1
+'c1              res     1
 sprt            res     1
 
 ptrc            res     1

@@ -1,0 +1,316 @@
+{
+    TMS9918 Renderer Example
+    PAL / NTSC Video Driver by Chip Gracey
+    Tweaked by Marco Maccaferri <macca@maccasoft.com>
+}
+CON
+    _clkfreq    = 160_000_000
+    video_pin   = 32+7*3 addpins 1
+
+    x_pixels    = 256
+    y_pixels    = 192
+
+    x_tweak     = 0
+    y_tweak     = 0
+
+PUB start(pal, x_total, bitmap, pin) | dotf, dotps, i
+
+    dotf := muldiv64(x_total, pal ? pal_cf * 4 * 128 : ntsc_cf * 4 * 128, pal ? pal_cc : ntsc_cc) 'compute pixel clock * 128
+    dotps := muldiv64(1_000_000, 128_000_000, dotf)     'compute ps per pixel clock
+
+    debug(udec(dotf,dotps))
+
+    _md := pal << 2 '| interlaced << 1                  'set modal data
+    _cb := pal ? pal_cb : ntsc_cb
+    _cy := pal ? pal_cy : ntsc_cy
+    _ci := pal ? pal_ci : ntsc_ci
+    _cq := pal ? pal_cq : ntsc_cq
+    _ca := pal ? pal_ca : ntsc_cq
+    _cf := (pal ? pal_cf : ntsc_cf) frac clkfreq
+
+    i := 31 - encod clkfreq                             'compute very accurate streamer frequency to stop dot-crawl
+    _xf := ((dotf >> (7-i)) frac (clkfreq << i) + 1) >> 1
+
+    debug(udec(i),ubin_long(clkfreq))
+
+    _bs := (pal ? pal_bs : ntsc_bs)                     'compute horizontal sync timing
+    _ds := (pal ? pal_ds : ntsc_ds) + _bs
+    _bc := (pal ? pal_bc : ntsc_bc) + _ds
+    _dc := (pal ? pal_dc : ntsc_dc) + _bc
+    _ac := (pal ? pal_ac : ntsc_ac) + _dc
+
+    _bs := (_bs << 1 / dotps + 1) >> 1
+    _ds := (_ds << 1 / dotps + 1) >> 1 - _bs
+    _bc := (_bc << 1 / dotps + 1) >> 1 - _bs - _ds
+    _dc := (_dc << 1 / dotps + 1) >> 1 - _bs - _ds - _bc
+    _ac := (_ac << 1 / dotps + 1) >> 1 - _bs - _ds - _bc - _dc
+
+    i  := _bs + _ds + _bc + _dc + _ac                   'compute visible timing
+    _bv := (x_total - x_pixels - i) / 2 + x_tweak
+    _dv := x_pixels
+    _av := x_total - x_pixels - i - _bv
+    _db := _bv + _dv + _av
+
+    debug(udec(_bv,_dv,_av,i))
+
+    _hf := x_total / 2                                  'compute vertical sync timing
+    _hl := ((pal ? pal_hl : ntsc_hl) << 1 / dotps + 1) >> 1
+    _hh := _hf - _hl - _bs
+    _ll := ((pal ? pal_ll : ntsc_ll) << 1 / dotps + 1) >> 1
+    _lh := _hf - _ll - _bs
+    _vs := pal ? pal_vs : ntsc_vs
+
+    repeat i from @_bs to @_lh step 4                       'turn bs..lh into streamer commands
+        long[i] |= i == @_dv ? $7F08_0000 : $7F01_0000
+
+    i  := pal ? pal_dl : ntsc_dl                        'compute vertical lines
+    _bl := (i - y_pixels) / 2 + y_tweak
+    _al := i - y_pixels - _bl
+    _bl += 10                                           '+10 for ntsc
+
+    _pl := @tms_palette
+    _bm := bitmap
+    _pn := pin
+
+    coginit(16, @pal_ntsc, 0)
+
+DAT             orgh
+
+tms_palette     long    $00_00_00_00
+                long    $00_00_00_00
+                long    $20_C0_20_00
+                long    $60_E0_60_00
+                long    $20_20_E0_00
+                long    $40_60_E0_00
+                long    $A0_20_20_00
+                long    $40_C0_E0_00
+                long    $E0_20_20_00
+                long    $E0_60_60_00
+                long    $C0_C0_20_00
+                long    $C0_C0_80_00
+                long    $20_80_20_00
+                long    $C0_40_A0_00
+                long    $A0_A0_A0_00
+                long    $E0_E0_E0_00
+
+DAT             org
+'
+' Setup
+'
+pal_ntsc
+                setq2   #$10 - 1                'load palette into lut
+                rdlong  0,_pl
+
+                setcmod #%11_1_0000             'set colorspace converter to YIQ mode (composite)
+                setcy   _cy                     'set colorspace converter y coefficients
+                setci   _ci                     'set colorspace converter i coefficients
+                setcfrq _cf                     'set colorspace converter frequency
+                setxfrq _xf                     'set transfer frequency
+
+                cogid   x                       'install cogid into dacmode
+                setnib  dacmode,x,#2
+                wrpin   dacmode,_pn             'enable dac mode in pin(s)
+                drvl    _pn                     'enable dac output(s)
+'
+'
+' Field loop
+'
+' _md   00x     NTSC non-interlaced:    7H, 6L, 6H, half, B(10), F0(243)
+'       010     NTSC interlaced field0: 6H, 6L, 6H, B(10), F0(243)
+'       011     NTSC interlaced field1: 7H, 6L, 6H, half, B(10), F1(243)
+'       10x     PAL non-interlaced:     5H, 5L, 5H, half, B(16), F0(288)
+'       110     PAL interlaced field0:  5H, 5L, 5H, half, B(16), F0(288)
+'       111     PAL interlaced field1:  6H, 5L, 5H, B(17), F1(288)
+'
+field           mov     x, _bl                  'before-visible blank lines (already +10 for ntsc)
+                test    _md, #%100      wz      'if pal and field0 (%1x0), +6 top blanks
+                test    _md, #%001      wc      'if pal and field1 (%1x1), +7 top blanks
+        if_nz   addx    x, #6
+                call    #blank
+
+                mov     x, #0                   'visible lines
+                rdfast  #0, _bm                 'start reading pixels into fifo
+line            call    #hsync                  'do horizontal sync
+                xcont   _bv, #0                 'before-visible spacer
+                xcont   _dv, #0                 'visible line
+                xcont   _av, #0                 'after-visible spacer
+                incmod  x, #y_pixels-1  wc      'another line?
+        if_nc   jmp     #line
+
+                mov     x, _al          wz      'after-visible blank lines
+        if_nz   call    #blank
+
+                test    _md, #%010      wc      'toggle field?
+        if_c    xor     _md, #%001
+
+                decod   y, _md                  'initial high vertical syncs
+                test    y, #%1000_1001  wc      'if ntsc/non-interlaced or field1, add 1
+                addx    x, _vs
+vhigh           xcont   _bs, #1
+                xcont   _hl, #2
+                xcont   _hh, #1
+                djnz    x, #vhigh
+
+                mov     x, _vs                  'low vertical syncs
+vlow            xcont   _bs, #1
+                xcont   _ll, #2
+                xcont   _lh, #1
+                djnz    x, #vlow
+
+                mov     x, _vs                  'final high vertical syncs
+vhigh2          xcont   _bs, #1
+                xcont   _hl, #2
+                xcont   _hh, #1
+                djnz    x, #vhigh2
+
+                test    y, #%0101_1001  wc      'if ntsc/non-interlaced/field0 or ntsc/interlaced/field1 or pal/field0, do half line
+    if_c        xcont   _hf, #1
+
+                jmp     #field                  'loop
+'
+'
+' Subroutines
+'
+blank           call    #hsync                  'blank lines
+                xcont   _db, #1
+        _ret_   djnz    x, #blank
+
+
+hsync           xcont   _bs, #1                 'horizontal sync
+                xcont   _ds, #2
+                xcont   _bc, #1
+                xcont   _dc, _cb
+
+                bitnot  _md, #31        wcz     'for pal, alternate phase each line
+   if_nc        setcq   _cq
+   if_c         setcq   _ca
+
+   _ret_        xcont   _ac, #1
+'
+'
+' Data
+'
+dacmode         long    p_dac_75r_2v+p_channel  '%0000_0000_000_101110000xxxx_01_00000_0
+
+lutc            long    0
+lutd            long    0
+
+x               long    0
+y               long    0
+
+_md             long    0       'mode (bits 2/1/0 : pal/interlace/field)
+_cb             long    0       'colorburst reference color
+_cy             long    0       'colorspace y coefficients
+_ci             long    0       'colorspace i coefficients
+_cq             long    0       'colorspace q coefficients
+_ca             long    0       'colorspace q coefficients, alt for pal
+_cf             long    0       'colorspace frequency setting
+_xf             long    0       'streamer frequency setting
+_bs             long    0       'streamer command: before-sync
+_ds             long    0       'streamer command: during-sync
+_bc             long    0       'streamer command: before-colorburst
+_dc             long    0       'streamer command: during-colorburst
+_ac             long    0       'streamer command: after-colorburst
+_bv             long    0       'streamer command: before-visible
+_dv             long    0       'streamer command: during-visible
+_av             long    0       'streamer command: after-visible
+_db             long    0       'streamer command: during-blank
+_hf             long    0       'streamer command: half-line
+_hl             long    0       'streamer command: high-vsync-low
+_hh             long    0       'streamer command: high-vsync-high
+_ll             long    0       'streamer command: low-vsync-low
+_lh             long    0       'streamer command: low-vsync-high
+_vs             long    0       'vertical sync pulses
+_bl             long    0       'before-visible lines
+_al             long    0       'after-visible lines
+_pl             long    0       'palette pointer
+_bm             long    0       'bitmap pointer
+_pn             long    0       'pin(s)
+
+
+CON
+
+'============================================================================================= NTSC metrics
+
+ntsc_blank_lev  = 40.0                                  'levels
+ntsc_black_lev  = ntsc_blank_lev + 7.5
+ntsc_peak_lev   = ntsc_blank_lev + 140.0
+ntsc_scale      = 127.0 / ntsc_peak_lev * 128.0
+ntsc_scale_cor  = ntsc_scale / 1.646                    'CORDIC prescale for IQ modulator
+
+ntsc_blank      = round(ntsc_scale * 2.0 * ntsc_blank_lev / ntsc_peak_lev)
+ntsc_black      = round(ntsc_scale * 2.0 * ntsc_black_lev / ntsc_peak_lev)
+
+ntsc_yr         = round(ntsc_scale     *  0.299)        'Y sums to 1
+ntsc_yg         = round(ntsc_scale     *  0.587)
+ntsc_yb         = round(ntsc_scale     *  0.114)
+
+ntsc_ir         = round(ntsc_scale_cor *  0.596)        'I sums to 0
+ntsc_ig         = round(ntsc_scale_cor * -0.274)
+ntsc_ib         = round(ntsc_scale_cor * -0.322)
+
+ntsc_qr         = round(ntsc_scale_cor *  0.212)        'Q sums to 0
+ntsc_qg         = round(ntsc_scale_cor * -0.523)
+ntsc_qb         = round(ntsc_scale_cor *  0.311)
+
+ntsc_cy         = (ntsc_yr & $FF) << 24 + (ntsc_yg & $FF) << 16 + (ntsc_yb & $FF) << 8 + ntsc_black
+ntsc_ci         = (ntsc_ir & $FF) << 24 + (ntsc_ig & $FF) << 16 + (ntsc_ib & $FF) << 8 + ntsc_blank
+ntsc_cq         = (ntsc_qr & $FF) << 24 + (ntsc_qg & $FF) << 16 + (ntsc_qb & $FF) << 8 + 128
+
+ntsc_cb         = $809000_01                            'colorburst reference color
+
+ntsc_cf         = 3_579_545                             'colorburst frequency
+ntsc_cc         = round(227.5 * 4.0)                    'color cycles per line * 4 to preserve fraction
+
+ntsc_bs         =  1_600_000                            'ps before sync
+ntsc_ds         =  4_700_000                            'ps during sync
+ntsc_bc         =    600_000                            'ps before colorburst
+ntsc_dc         =  2_500_000                            'ps during colorburst
+ntsc_ac         =  1_500_000                            'ps after colorburst
+ntsc_hl         =  2_300_000                            'ps during high vsync
+ntsc_ll         = 27_100_000                            'ps during low vsync
+ntsc_vs         = 6                                     'vsync pulses
+ntsc_dl         = 243                                   'display lines
+
+'============================================================================================= PAL metrics
+
+pal_blank_lev   = 43.0                                  'levels
+pal_black_lev   = pal_blank_lev + 0.0
+pal_peak_lev    = pal_blank_lev + 140.0
+pal_scale       = 127.0 / pal_peak_lev * 128.0
+pal_scale_cor   = pal_scale / 1.646                     'CORDIC prescale for IQ modulator
+
+pal_blank       = round(pal_scale * 2.0 * pal_blank_lev / pal_peak_lev)
+pal_black       = round(pal_scale * 2.0 * pal_black_lev / pal_peak_lev)
+
+pal_yr          = round(pal_scale     *  0.299)         'Y sums to 1
+pal_yg          = round(pal_scale     *  0.587)
+pal_yb          = round(pal_scale     *  0.114)
+
+pal_ur          = round(pal_scale_cor * -0.147)         'I sums to 0
+pal_ug          = round(pal_scale_cor * -0.289)
+pal_ub          = round(pal_scale_cor *  0.436)
+
+pal_vr          = round(pal_scale_cor *  0.615)         'Q sums to 0
+pal_vg          = round(pal_scale_cor * -0.515)
+pal_vb          = round(pal_scale_cor * -0.100)
+
+pal_cy          = ( pal_yr & $FF) << 24 + ( pal_yg & $FF) << 16 + ( pal_yb & $FF) << 8 + pal_black
+pal_ci          = ( pal_ur & $FF) << 24 + ( pal_ug & $FF) << 16 + ( pal_ub & $FF) << 8 + pal_blank
+pal_cq          = ( pal_vr & $FF) << 24 + ( pal_vg & $FF) << 16 + ( pal_vb & $FF) << 8 + 128
+pal_ca          = (-pal_vr & $FF) << 24 + (-pal_vg & $FF) << 16 + (-pal_vb & $FF) << 8 + 128
+
+pal_cb          = $FFC060_01                            'colorburst reference color
+
+pal_cf          = 4_433_618                             'colorburst frequency
+pal_cc          = round(283.75 * 4.0)                   'color cycles per line * 4 to preserve fraction
+
+pal_bs          =  1_500_000                            'ps before sync
+pal_ds          =  4_700_000                            'ps during sync
+pal_bc          =    900_000                            'ps before colorburst
+pal_dc          =  2_300_000                            'ps during colorburst
+pal_ac          =  2_600_000                            'ps after colorburst
+pal_hl          =  2_350_000                            'ps during high vsync
+pal_ll          = 27_300_000                            'ps during low vsync
+pal_vs          = 5                                     'vsync pulses
+pal_dl          = 288                                   'display lines
