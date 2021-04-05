@@ -1,72 +1,26 @@
 {
-    TMS9918 Renderer Example
+    TMS9918 Emulation
     Written by Marco Maccaferri <macca@maccasoft.com>
 }
+
 CON
-    _clkfreq    = 160_000_000
+
     video_pin   = 32+7*3 addpins 1
 
-VAR
-
-    byte bitmap[256 * 192]
 
 OBJ
 
     video : "tms9918_cvbs"
 
-PUB main() | cog, bmpa
+PUB start(tms_regs, tms_vram, tms_bitmap) | cog
 
-    debug(`BITMAP TMS9918 POS 50 50 SIZE 320 240 DOTSIZE 2 LUT8 LONGS_8BIT)
-    debug(`TMS9918 LUTCOLORS $00_00_00 $00_00_00 $20_C0_20 $60_E0_60 $20_20_E0 $40_60_E0 $A0_20_20 $40_C0_E0 $E0_20_20 $E0_60_60 $C0_C0_20 $C0_C0_80 $20_80_20 $C0_40_A0 $A0_A0_A0 $E0_E0_E0)
-
-    video.start(0, 360, @bitmap, video_pin)     ' NTSC
-    'video.start(1, 410, @bitmap, video_pin)     ' PAL
-
-    'bytefill(@bitmap, $00, 320 * 240)
-
-    _regs := @tms9918_regs
-    _vram := @tms9918_vram
-    _bitmap := @bitmap
+    _regs := tms_regs
+    _vram := tms_vram
+    _bitmap := tms_bitmap
     cog := coginit(16, @driver, 0)
-    repeat until cogchk(cog) == 0
 
-    debug(`TMS9918 SET 0 0)
-    bmpa := @bitmap
-    repeat 24
-        repeat 80
-            debug(`TMS9918 `UHEX_(0))
-        'waitms(1)
-    repeat 192
-        repeat 8
-            debug(`TMS9918 `UHEX_(0))
-        repeat 64
-            debug(`TMS9918 `UHEX_(long[bmpa]))
-            bmpa += 4
-        repeat 8
-            debug(`TMS9918 `UHEX_(0))
-        'waitms(1)
-    repeat 24
-        repeat 80
-            debug(`TMS9918 `UHEX_(0))
-        'waitms(1)
-
-    repeat
-
-DAT
-
-                orgh
-
-tms9918_regs
-'                file    "tms9918_ascii.regs"
-'                file    "tms9918_nyan.regs"
-'                file    "tms9918_mandel.regs"
-                file    "tms9918_bombjack.regs"
-
-tms9918_vram
-'                file    "tms9918_ascii.vram"
-'                file    "tms9918_nyan.vram"
-'                file    "tms9918_mandel.vram"
-                file    "tms9918_bombjack.vram"
+    video.start(0, 360, _bitmap, video_pin, _regs, 1 << cog)   ' NTSC
+    'video.start(1, 420, _bitmap, video_pin, _regs, 1 << cog)   ' PAL
 
 DAT
 
@@ -79,12 +33,12 @@ driver
                 mov     scnt, #0
 .scanline       call    #render
                 add     ptrb, #256
-                add     scnt, #1
-                cmp     scnt, #192 wc
-    if_c        jmp     #.scanline
+                incmod  scnt, #192-1    wc
+    if_nc       jmp     #.scanline
 
-                cogid   a
-                cogstop a
+                cogatn  #%00000001
+                waitatn
+                jmp     #.frame
 
 render
                 mov     ptra, _regs

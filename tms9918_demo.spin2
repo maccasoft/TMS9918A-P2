@@ -1,0 +1,80 @@
+{
+    TMS9918 Animation Demo
+    Written by Marco Maccaferri <macca@maccasoft.com>
+
+    Based on Z80 code by J.B. Langston: https://github.com/jblang/TMS9918A.git
+    Nyan Cat images from Passan Kiskat by Dromedaar Vision: http://www.dromedaar.com/
+}
+CON
+    _clkfreq    = 160_000_000
+
+VAR
+
+    byte tms_regs[8]
+    byte tms_vram[16384]
+    byte tms_bitmap[256 * 192]
+
+OBJ
+
+    tms   : "tms9918"
+
+PUB main() | cog, addr, ra, ri
+
+    tms.start(@tms_regs, @tms_vram, @tms_bitmap)
+
+    ' initialize registers for multicolor mode
+    bytemove(@tms_regs, @TMSMCREG, 8)
+
+    ' initialize nametable
+    addr := $800
+    ri := 0
+    repeat 6
+        repeat ra from ri to ri+31
+            tms_vram[addr++] := ra
+        repeat ra from ri to ri+31
+            tms_vram[addr++] := ra
+        repeat ra from ri to ri+31
+            tms_vram[addr++] := ra
+        repeat ra from ri to ri+31
+            tms_vram[addr++] := ra
+        ri += 32
+
+    ' animation loop
+
+    addr := @ANIMATION
+    repeat
+        waitatn() ' wait for frame update, adjust for speed
+        waitatn()
+        waitatn()
+        waitatn()
+        bytemove(@tms_vram + $0000, addr, $600)
+        addr += $600
+        if addr >= @ANIMATION_END
+            addr := @ANIMATION
+
+DAT
+
+                orgh
+
+' register values for multicolor mode
+TMSMCREG
+                byte    %00000000       ' external video disabled
+                byte    %11001000       ' 16KB, display enabled, multicolor mode
+                byte    $02             ' name table at $8000
+                byte    $00             ' color table not used
+                byte    $00             ' pattern table at $0000
+                byte    $76             ' sprite attribute table at $3B00
+                byte    $03             ' sprite pattern table at $1800
+                byte    $04             ' black background
+
+ANIMATION
+                file    "nyan.bin"      ' animations, choose one
+                'file    "nyands.bin"
+                'file    "nyanfi.bin"
+                'file    "nyangb.bin"
+                'file    "nyanlb.bin"
+                'file    "nyann1.bin"
+                'file    "nyann2.bin"
+                'file    "nyanus.bin"
+                'file    "nyanxx.bin"
+ANIMATION_END

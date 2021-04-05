@@ -1,11 +1,9 @@
 {
-    TMS9918 Renderer Example
+    TMS9918 Emulation
     PAL / NTSC Video Driver by Chip Gracey
     Tweaked by Marco Maccaferri <macca@maccasoft.com>
 }
 CON
-    _clkfreq    = 160_000_000
-    video_pin   = 32+7*3 addpins 1
 
     x_pixels    = 256
     y_pixels    = 192
@@ -13,7 +11,7 @@ CON
     x_tweak     = 0
     y_tweak     = 0
 
-PUB start(pal, x_total, bitmap, pin) | dotf, dotps, i
+PUB start(pal, x_total, bitmap, pin, regs, atn) | dotf, dotps, i
 
     dotf := muldiv64(x_total, pal ? pal_cf * 4 * 128 : ntsc_cf * 4 * 128, pal ? pal_cc : ntsc_cc) 'compute pixel clock * 128
     dotps := muldiv64(1_000_000, 128_000_000, dotf)     'compute ps per pixel clock
@@ -51,7 +49,7 @@ PUB start(pal, x_total, bitmap, pin) | dotf, dotps, i
     _av := x_total - x_pixels - i - _bv
     _db := _bv + _dv + _av
 
-    debug(udec(_bv,_dv,_av,i))
+    debug(udec(_bv, _dv, _av, i))
 
     _hf := x_total / 2                                  'compute vertical sync timing
     _hl := ((pal ? pal_hl : ntsc_hl) << 1 / dotps + 1) >> 1
@@ -60,19 +58,26 @@ PUB start(pal, x_total, bitmap, pin) | dotf, dotps, i
     _lh := _hf - _ll - _bs
     _vs := pal ? pal_vs : ntsc_vs
 
-    repeat i from @_bs to @_lh step 4                       'turn bs..lh into streamer commands
+    repeat i from @_bs to @_lh step 4                   'turn bs..lh into streamer commands
         long[i] |= i == @_dv ? $7F08_0000 : $7F01_0000
+    _bv := (_bv & $FFFF) | $3F00_0000   'overrides
+    _av := (_av & $FFFF) | $3F00_0000
+    _bb := (_db & $FFFF) | $3F00_0000
 
-    i  := pal ? pal_dl : ntsc_dl                        'compute vertical lines
+    i  := pal ? pal_dl : ntsc_dl         'compute vertical lines
     _bl := (i - y_pixels) / 2 + y_tweak
     _al := i - y_pixels - _bl
-    _bl += 10                                           '+10 for ntsc
+    _tb := pal ? pal_tb : ntsc_tb
+
+    debug(udec(_tb, _bl, y_pixels, _al, i))
 
     _pl := @tms_palette
     _bm := bitmap
     _pn := pin
 
-    coginit(16, @pal_ntsc, 0)
+    _tms_atn := atn
+
+    coginit(16, @pal_ntsc, regs)
 
 DAT             orgh
 
@@ -118,34 +123,38 @@ pal_ntsc
 ' _md   00x     NTSC non-interlaced:    7H, 6L, 6H, half, B(10), F0(243)
 '       010     NTSC interlaced field0: 6H, 6L, 6H, B(10), F0(243)
 '       011     NTSC interlaced field1: 7H, 6L, 6H, half, B(10), F1(243)
-'       10x     PAL non-interlaced:     5H, 5L, 5H, half, B(16), F0(288)
+'       10x     PAL non-interlaced:     6H, 5L, 5H, half, B(16), F0(288)
 '       110     PAL interlaced field0:  5H, 5L, 5H, half, B(16), F0(288)
 '       111     PAL interlaced field1:  6H, 5L, 5H, B(17), F1(288)
 '
-field           mov     x, _bl                  'before-visible blank lines (already +10 for ntsc)
-                test    _md, #%100      wz      'if pal and field0 (%1x0), +6 top blanks
-                test    _md, #%001      wc      'if pal and field1 (%1x1), +7 top blanks
-        if_nz   addx    x, #6
+field           mov     x, _tb                  'top blank lines
                 call    #blank
+
+                mov     x, _bl          wz      'before-visible blank lines
+        if_nz   call    #border
 
                 mov     x, #0                   'visible lines
                 rdfast  #0, _bm                 'start reading pixels into fifo
 line            call    #hsync                  'do horizontal sync
-                xcont   _bv, #0                 'before-visible spacer
+                rdbyte  _tms_back, ptra[7]      'get tms color register
+                movbyts _tms_back, #0           'set border color
+                xcont   _bv, _tms_back          'before-visible spacer
                 xcont   _dv, #0                 'visible line
-                xcont   _av, #0                 'after-visible spacer
+                xcont   _av, _tms_back          'after-visible spacer
                 incmod  x, #y_pixels-1  wc      'another line?
         if_nc   jmp     #line
 
                 mov     x, _al          wz      'after-visible blank lines
-        if_nz   call    #blank
+        if_nz   call    #border
+
+                cogatn  _tms_atn                'wakeup rendering cog(s)
 
                 test    _md, #%010      wc      'toggle field?
         if_c    xor     _md, #%001
 
-                decod   y, _md                  'initial high vertical syncs
-                test    y, #%1000_1001  wc      'if ntsc/non-interlaced or field1, add 1
-                addx    x, _vs
+                decod   y, _md
+                test    y,#%1001_1000   wc      'if pal/non-interlaced or field1, add 1
+                addx    x,_vs                   'initial high vertical syncs
 vhigh           xcont   _bs, #1
                 xcont   _hl, #2
                 xcont   _hh, #1
@@ -163,9 +172,6 @@ vhigh2          xcont   _bs, #1
                 xcont   _hh, #1
                 djnz    x, #vhigh2
 
-                test    y, #%0101_1001  wc      'if ntsc/non-interlaced/field0 or ntsc/interlaced/field1 or pal/field0, do half line
-    if_c        xcont   _hf, #1
-
                 jmp     #field                  'loop
 '
 '
@@ -174,6 +180,13 @@ vhigh2          xcont   _bs, #1
 blank           call    #hsync                  'blank lines
                 xcont   _db, #1
         _ret_   djnz    x, #blank
+
+
+border          call    #hsync                  'blank lines
+                rdbyte  _tms_back, ptra[7]      'get tms color register
+                movbyts _tms_back, #0           'set border color
+                xcont   _bb, _tms_back
+        _ret_   djnz    x, #border
 
 
 hsync           xcont   _bs, #1                 'horizontal sync
@@ -191,9 +204,6 @@ hsync           xcont   _bs, #1                 'horizontal sync
 ' Data
 '
 dacmode         long    p_dac_75r_2v+p_channel  '%0000_0000_000_101110000xxxx_01_00000_0
-
-lutc            long    0
-lutd            long    0
 
 x               long    0
 y               long    0
@@ -215,17 +225,23 @@ _bv             long    0       'streamer command: before-visible
 _dv             long    0       'streamer command: during-visible
 _av             long    0       'streamer command: after-visible
 _db             long    0       'streamer command: during-blank
+_bb             long    0       'streamer command: during-border
 _hf             long    0       'streamer command: half-line
 _hl             long    0       'streamer command: high-vsync-low
 _hh             long    0       'streamer command: high-vsync-high
 _ll             long    0       'streamer command: low-vsync-low
 _lh             long    0       'streamer command: low-vsync-high
 _vs             long    0       'vertical sync pulses
+_ml             long    0       'mandatory blank lines
+_tb             long    0       'top blank lines
 _bl             long    0       'before-visible lines
 _al             long    0       'after-visible lines
 _pl             long    0       'palette pointer
 _bm             long    0       'bitmap pointer
 _pn             long    0       'pin(s)
+
+_tms_atn        long    0       'cog attention
+_tms_back       long    0       'backdrop/border color
 
 
 CON
@@ -271,6 +287,7 @@ ntsc_hl         =  2_300_000                            'ps during high vsync
 ntsc_ll         = 27_100_000                            'ps during low vsync
 ntsc_vs         = 6                                     'vsync pulses
 ntsc_dl         = 243                                   'display lines
+ntsc_tb         = 10                                    'top border
 
 '============================================================================================= PAL metrics
 
@@ -314,3 +331,4 @@ pal_hl          =  2_350_000                            'ps during high vsync
 pal_ll          = 27_300_000                            'ps during low vsync
 pal_vs          = 5                                     'vsync pulses
 pal_dl          = 288                                   'display lines
+pal_tb          = 16                                    'top black
