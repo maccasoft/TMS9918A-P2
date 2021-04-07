@@ -46,7 +46,6 @@ PUB main() | cog, addr, ra, ri
         waitatn() ' wait for frame update, adjust for speed
         waitatn()
         waitatn()
-        waitatn()
         bytemove(@tms_vram + $0000, addr, $600)
         addr += $600
         if addr >= @ANIMATION_END

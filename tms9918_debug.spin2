@@ -1,0 +1,62 @@
+{
+    TMS9918 Renderer Example
+    Written by Marco Maccaferri <macca@maccasoft.com>
+}
+CON
+    _clkfreq    = 160_000_000
+
+VAR
+
+    byte bitmap[256 * 192]
+
+OBJ
+
+    tms   : "tms9918"
+
+PUB main() | addr, back
+
+    debug(`BITMAP TMS9918 POS 1250 50 SIZE 320 240 DOTSIZE 2 LUT8 LONGS_8BIT)
+    debug(`TMS9918 LUTCOLORS $00_00_00 $00_00_00 $20_C0_20 $60_E0_60 $20_20_E0 $40_60_E0 $A0_20_20 $40_C0_E0 $E0_20_20 $E0_60_60 $C0_C0_20 $C0_C0_80 $20_80_20 $C0_40_A0 $A0_A0_A0 $E0_E0_E0)
+
+    tms.start(@tms9918_regs, @tms9918_vram, @bitmap)
+
+    addr := @bitmap
+    back := byte[@tms9918_regs][7] & $0F
+    byte[@back][3] := byte[@back][2] := byte[@back][1] := byte[@back][0]
+
+    debug(`TMS9918 SET 0 0)
+    repeat 24
+        repeat 80
+            debug(`TMS9918 `UHEX_(back))
+        waitms(1)
+    repeat 192
+        repeat 8
+            debug(`TMS9918 `UHEX_(back))
+        repeat 64
+            debug(`TMS9918 `UHEX_(long[addr]))
+            addr += 4
+        repeat 8
+            debug(`TMS9918 `UHEX_(back))
+        waitms(1)
+    repeat 24
+        repeat 80
+            debug(`TMS9918 `UHEX_(back))
+        waitms(1)
+
+    repeat
+
+DAT
+
+                orgh
+
+tms9918_regs
+                file    "tms9918_ascii.regs"
+'                file    "tms9918_nyan.regs"
+'                file    "tms9918_mandel.regs"
+'                file    "tms9918_bombjack.regs"
+
+tms9918_vram
+                file    "tms9918_ascii.vram"
+'                file    "tms9918_nyan.vram"
+'                file    "tms9918_mandel.vram"
+'                file    "tms9918_bombjack.vram"

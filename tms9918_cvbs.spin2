@@ -67,9 +67,9 @@ PUB start(pal, x_total, bitmap, pin, regs, atn) | dotf, dotps, i
     i  := pal ? pal_dl : ntsc_dl         'compute vertical lines
     _bl := (i - y_pixels) / 2 + y_tweak
     _al := i - y_pixels - _bl
-    _tb := pal ? pal_tb : ntsc_tb
+    _rl := pal ? pal_rl : ntsc_rl
 
-    debug(udec(_tb, _bl, y_pixels, _al, i))
+    debug(udec(_rl, _bl, y_pixels, _al, i))
 
     _pl := @tms_palette
     _bm := bitmap
@@ -127,16 +127,25 @@ pal_ntsc
 '       110     PAL interlaced field0:  5H, 5L, 5H, half, B(16), F0(288)
 '       111     PAL interlaced field1:  6H, 5L, 5H, B(17), F1(288)
 '
-field           mov     x, _tb                  'top blank lines
+field           mov     x, _rl                  'retrace lines
+                cmp     _md, #%100      wz      'if pal/non-interlaced
+        if_z    add     x, #2                   'add 2 blanks to sync phase (unknown why)
                 call    #blank
 
-                mov     x, _bl          wz      'before-visible blank lines
-        if_nz   call    #border
+                mov     x, _bl                  'before-visible blank lines
+                sub     x, #2                   'less 2 to start rendering
+                call    #border
+
+                cogatn  _tms_atn                'wakeup rendering cog(s)
+
+                mov     x, #2                   'do the remaining before-visible blank lines
+                call    #border
 
                 mov     x, #0                   'visible lines
                 rdfast  #0, _bm                 'start reading pixels into fifo
 line            call    #hsync                  'do horizontal sync
                 rdbyte  _tms_back, ptra[7]      'get tms color register
+                and     _tms_back, #$0F         'mask backdrop color
                 movbyts _tms_back, #0           'set border color
                 xcont   _bv, _tms_back          'before-visible spacer
                 xcont   _dv, #0                 'visible line
@@ -147,30 +156,33 @@ line            call    #hsync                  'do horizontal sync
                 mov     x, _al          wz      'after-visible blank lines
         if_nz   call    #border
 
-                cogatn  _tms_atn                'wakeup rendering cog(s)
+                cogatn  #%00000001              'signal vertical sync to cog0
 
                 test    _md, #%010      wc      'toggle field?
         if_c    xor     _md, #%001
 
-                decod   y, _md
-                test    y,#%1001_1000   wc      'if pal/non-interlaced or field1, add 1
-                addx    x,_vs                   'initial high vertical syncs
-vhigh           xcont   _bs, #1
-                xcont   _hl, #2
-                xcont   _hh, #1
-                djnz    x, #vhigh
+                decod   y,_md                   'initial high vertical syncs
+                test    y,#%1000_1001   wc      'if ntsc/non-interlaced or field1, add 1
+                addx    x,_vs
+vhigh           xcont   _bs,#1
+                xcont   _hl,#2
+                xcont   _hh,#1
+                djnz    x,#vhigh
 
-                mov     x, _vs                  'low vertical syncs
-vlow            xcont   _bs, #1
-                xcont   _ll, #2
-                xcont   _lh, #1
-                djnz    x, #vlow
+                mov     x,_vs                   'low vertical syncs
+vlow            xcont   _bs,#1
+                xcont   _ll,#2
+                xcont   _lh,#1
+                djnz    x,#vlow
 
-                mov     x, _vs                  'final high vertical syncs
-vhigh2          xcont   _bs, #1
-                xcont   _hl, #2
-                xcont   _hh, #1
-                djnz    x, #vhigh2
+                mov     x,_vs                   'final high vertical syncs
+vhigh2          xcont   _bs,#1
+                xcont   _hl,#2
+                xcont   _hh,#1
+                djnz    x,#vhigh2
+
+                test    y,#%0101_1001   wc      'if ntsc/non-interlaced/field0 or ntsc/interlaced/field1 or pal/field0, do half line
+    if_c        xcont   _hf,#1
 
                 jmp     #field                  'loop
 '
@@ -184,6 +196,7 @@ blank           call    #hsync                  'blank lines
 
 border          call    #hsync                  'blank lines
                 rdbyte  _tms_back, ptra[7]      'get tms color register
+                and     _tms_back, #$0F         'mask backdrop color
                 movbyts _tms_back, #0           'set border color
                 xcont   _bb, _tms_back
         _ret_   djnz    x, #border
@@ -233,7 +246,7 @@ _ll             long    0       'streamer command: low-vsync-low
 _lh             long    0       'streamer command: low-vsync-high
 _vs             long    0       'vertical sync pulses
 _ml             long    0       'mandatory blank lines
-_tb             long    0       'top blank lines
+_rl             long    0       'retrace lines
 _bl             long    0       'before-visible lines
 _al             long    0       'after-visible lines
 _pl             long    0       'palette pointer
@@ -287,7 +300,7 @@ ntsc_hl         =  2_300_000                            'ps during high vsync
 ntsc_ll         = 27_100_000                            'ps during low vsync
 ntsc_vs         = 6                                     'vsync pulses
 ntsc_dl         = 243                                   'display lines
-ntsc_tb         = 10                                    'top border
+ntsc_rl         = 10                                    'retrace lines
 
 '============================================================================================= PAL metrics
 
@@ -331,4 +344,4 @@ pal_hl          =  2_350_000                            'ps during high vsync
 pal_ll          = 27_300_000                            'ps during low vsync
 pal_vs          = 5                                     'vsync pulses
 pal_dl          = 288                                   'display lines
-pal_tb          = 16                                    'top black
+pal_rl          = 16                                    'retrace lines

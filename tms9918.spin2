@@ -19,8 +19,8 @@ PUB start(tms_regs, tms_vram, tms_bitmap) | cog
     _bitmap := tms_bitmap
     cog := coginit(16, @driver, 0)
 
-    video.start(0, 360, _bitmap, video_pin, _regs, 1 << cog)   ' NTSC
-    'video.start(1, 420, _bitmap, video_pin, _regs, 1 << cog)   ' PAL
+    video.start(0, 378, _bitmap, video_pin, _regs, 1 << cog)   ' NTSC
+    'video.start(1, 416, _bitmap, video_pin, _regs, 1 << cog)   ' PAL
 
 DAT
 
@@ -28,39 +28,30 @@ DAT
 
 driver
 .frame
+                'getct   t1
+
+                mov     ptra, _regs
                 mov     ptrb, _bitmap
 
-                mov     scnt, #0
-.scanline       call    #render
-                add     ptrb, #256
-                incmod  scnt, #192-1    wc
-    if_nc       jmp     #.scanline
-
-                cogatn  #%00000001
-                waitatn
-                jmp     #.frame
-
-render
-                mov     ptra, _regs
-                rdbyte  regs+0, ptra++
-                rdbyte  regs+1, ptra++
+                rdbyte  regs+0, ptra[0]
+                rdbyte  regs+1, ptra[1]
 
                 test    regs+0, #TMSMODE3    wz ' graphics mode II
 
-                rdbyte  regs+2, ptra++
+                rdbyte  regs+2, ptra[2]
                 shl     regs+2, #10             ' name table base address * $400
-                rdbyte  regs+3, ptra++
+                rdbyte  regs+3, ptra[3]
                 shl     regs+3, #6              ' color table base address * $40
     if_nz       andn    regs+3, vdp_8k_mask     ' limit color table to 8k boundaries
-                rdbyte  regs+4, ptra++
+                rdbyte  regs+4, ptra[4]
                 shl     regs+4, #11             ' pattern generator base address * $800
     if_nz       andn    regs+4, vdp_8k_mask     ' limit pattern table to 8k boundaries
-                rdbyte  regs+5, ptra++
+                rdbyte  regs+5, ptra[5]
                 shl     regs+5, #7              ' sprite attribute table base address * $80
-                rdbyte  regs+6, ptra++
+                rdbyte  regs+6, ptra[6]
                 shl     regs+6, #11             ' sprite pattern generator base address * $800
 
-                rdbyte  regs+7, ptra++
+                rdbyte  regs+7, ptra[7]
 
                 add     regs+2, _vram
                 add     regs+3, _vram
@@ -68,32 +59,33 @@ render
                 add     regs+5, _vram
                 add     regs+6, _vram
 
+                mov     loff, #0
+                mov     scnt, #0
+.line           call    #render
+                add     ptrb, #256
+                incmod  loff, #7
+                incmod  scnt, #192-1    wc
+    if_nc       jmp     #.line
+
+                'getct   t2
+                'sub     t2, t1
+                'debug(UDEC(t2))
+                'jmp     #$
+
+                'cogatn  #%00000001
+                waitatn
+                jmp     #.frame
+
+t1              long    0
+t2              long    0
+
+render
                 mov     ptra, ptrb
 
                 test    regs+1, #TMSMODE2    wz ' multicolor mode
     if_nz       jmp     #multicolor_mode
 
-                mov     a, scnt                 ' row offset into pattern generator
-                and     a, #7
-
-                test    regs+0, #TMSMODE3    wz ' graphics mode II
-    if_nz       mov     b, scnt
-    if_nz       shr     b, #6                   ' divide by 64 (8 rows by 8 pixels)
-    if_nz       shl     b, #11                  ' multiply by 2048
-    if_nz       add     a, b
-
-    if_nz       add     regs+3, a               ' row offset into color table
-                add     regs+4, a
-
                 test    regs+1, #TMSMODE1    wz ' text mode
-
-                mov     a, scnt
-                andn    a, #$07                 ' divide and multiply by 8
-                mov     b, a
-                shl     a, #2                   ' multiply by 32
-    if_nz       add     a, b                    ' multiply by 40
-                add     regs+2, a
-
     if_z        jmp     #graphics_mode
 
 text_mode
@@ -103,13 +95,18 @@ text_mode
                 shr     a, #4
                 setbyte ctmp, a, #1
 
-                mov     ptra, ptrb
-                add     ptra, #8                ' skip 8 pixels
-                mov     ecnt, #40
+                mov     cbuf+0, ctmp
+                movbyts cbuf+0, #0
+                wrlong  cbuf+0, ptra++
+                wrlong  cbuf+0, ptra++
 
-.loop           rdbyte  ptrc, regs+2            ' read tile number to display
+                rdfast  #0, regs+2              ' fast-read nametable with fifo
+
+                rep     @.endloop, #40
+.loop           rfbyte  ptrc                    ' read tile number to display
                 shl     ptrc, #3                ' 8 bytes per tile
                 add     ptrc, regs+4
+                add     ptrc, loff
                 rdbyte  a, ptrc                 ' pixels, 1 bit per pixel, from msb
 
                 rev     a
@@ -122,9 +119,15 @@ text_mode
                 mov     cbuf+1, ctmp
                 movbyts cbuf+1, a
                 wrword  cbuf+1, ptra++
+.endloop
 
-                add     regs+2, #1
-                djnz    ecnt, #.loop
+                mov     cbuf+0, ctmp
+                movbyts cbuf+0, #0
+                wrlong  cbuf+0, ptra++
+                wrlong  cbuf+0, ptra++
+
+                cmp     loff, #7        wz
+    if_z        add     regs+2, #40
 
                 ret
 
@@ -132,20 +135,16 @@ multicolor_mode
                 mov     a, scnt
                 shr     a, #2
                 and     a, #$07
-                add     regs+4, a
 
-                mov     a, scnt
-                andn    a, #$07                 ' divide and multiply by 8
-                shl     a, #2                   ' multiply by 32
-                add     regs+2, a
+                rdfast  #0, regs+2              ' fast-read nametable with fifo
 
-                mov     ecnt, #32
-
-.loop           rdbyte  ptrc, regs+2            ' read tile number to display
+                rep     @.endloop, #32
+.loop           rfbyte  ptrc                    ' read tile number to display
                 shl     ptrc, #3
                 add     ptrc, regs+4            ' points to color table
+                add     ptrc, a
 
-                rdbyte  cbuf+0, ptrc                 ' colors
+                rdbyte  cbuf+0, ptrc            ' colors
 
                 mov     cbuf+1, cbuf+0
                 and     cbuf+1, #$0F wz
@@ -157,30 +156,41 @@ multicolor_mode
                 wrlong  cbuf+0, ptra++
                 movbyts cbuf+1, #%%0000
                 wrlong  cbuf+1, ptra++
+.endloop
 
-                add     regs+2, #1
-                djnz    ecnt, #.loop
+                cmp     loff, #7        wz
+    if_z        add     regs+2, #32
 
                 jmp     #sprites
 
 graphics_mode
-                mov     ecnt, #32
+                mov     b, loff
 
-.loop           rdbyte  ptrc, regs+2            ' read tile number to display
-                add     regs+2, #1
+                test    regs+0, #TMSMODE3    wz ' graphics mode II
+    if_nz       mov     a, scnt
+    if_nz       shr     a, #6                   ' divide by 64 (8 rows by 8 pixels)
+    if_nz       shl     a, #11                  ' multiply by 2048
+    if_nz       add     b, a
+
+                test    regs+0, #TMSMODE3 wz    ' graphics mode II
+                bitnz   .shlr, #21              ' patch shl(0)/shr(1)
+
+                rdfast  #0, regs+2              ' fast-read nametable with fifo
+
+                rep     @.endloop, #32
+.loop           rfbyte  ptrc                    ' read tile number to display
 
                 mov     ptrd, ptrc
-                test    regs+0, #TMSMODE3 wz    ' graphics mode II
-        if_nz   shl     ptrd, #3
-        if_z    shr     ptrd, #3
+.shlr           shl     ptrd, #3
                 add     ptrd, regs+3            ' points to color table
+                add     ptrd, b
                 rdbyte  a, ptrd                 ' colors
 
-                mov     cbuf+0, a
+                getnib  cbuf+0, a, #0
                 and     cbuf+0, #$0F wz
     if_z        setnib  cbuf+0, regs+7, #0
-                mov     cbuf+1, a
-                shr     cbuf+1, #4 wz
+                getnib  cbuf+1, a, #1
+                and     cbuf+1, #$0F wz
     if_z        setnib  cbuf+1, regs+7, #0
 
                 setbyte cbuf+0, cbuf+1, #1
@@ -188,6 +198,7 @@ graphics_mode
 
                 shl     ptrc, #3                ' 8 bytes per tile
                 add     ptrc, regs+4
+                add     ptrc, b
                 rdbyte  a, ptrc                 ' pixels, 1 bit per pixel, from msb
 
                 rev     a
@@ -198,14 +209,16 @@ graphics_mode
                 shr     a, #8
                 movbyts cbuf+1, a
                 wrlong  cbuf+1, ptra++
+.endloop
 
-                djnz    ecnt, #.loop
+                cmp     loff, #7        wz
+    if_z        add     regs+2, #32
 
                 ' fall through
 
 sprites
-                mov     lcnt, #4
-                mov     ccnt, #TMSSPRITES
+                mov     lcnt, #4                ' sprite scanline limit
+                mov     ccnt, #TMSSPRITES       ' number of sprites
 
                 mov     b, #8
                 test    regs+1, #TMSSPRSIZE wz
@@ -213,7 +226,8 @@ sprites
                 test    regs+1, #TMSSPRMAG  wz
     if_nz       shl     b, #1
 
-.loop           rdlong  sprt, regs+5
+                rdfast  #0, regs+5
+.loop           rflong  sprt
 
                 test    sprt, TMSSPRCOLOR wz    ' check sprite color
     if_z        jmp     #.next                  ' skip if transparent
@@ -227,9 +241,9 @@ sprites
     if_z        ret
 
                 mov     a, scnt                 ' check sprite scanline visibility
-                subs    a, y wc
+                subs    a, y    wc
     if_c        jmp     #.next
-                cmp     a, b wc
+                cmp     a, b    wc
     if_nc       jmp     #.next
 
                 mov     ptrc, sprt
@@ -241,7 +255,7 @@ sprites
     if_nz       shr     a, #1
                 add     ptrc, a
 
-                mov     ctmp, sprt                ' set pixel color
+                mov     ctmp, sprt              ' set pixel color
                 shr     ctmp, #24
                 and     ctmp, #$0F          wz
     if_z        setnib  ctmp, regs+7, #0
@@ -267,28 +281,26 @@ sprites
                 mov     a, #$80
     if_nz       shl     a, #8
 
-                test    regs+1, #TMSSPRMAG  wz
+                test    regs+1, #TMSSPRMAG  wz  ' Z=!magnify
 
                 rep     @.end_draw, ecnt
-.draw           cmps    x, #0       wc
-    if_c        jmp     #.l1
-                cmps    x, #256     wc
-    if_nc       jmp     #.next
-                test    sprt, a     wc
-    if_c        wrbyte  ctmp, ptra
-                add     ptra, #1
-    if_c_and_nz wrbyte  ctmp, ptra
-    if_nz       add     ptra, #1
+.draw           cmps    x, #0       wc          ' check pixel outside left border
+    if_c        jmp     #.l1                    ' skip if outside
+                cmps    x, #256     wc          ' check pixel outside right border
+    if_nc       jmp     #.end_draw              ' nothing more to do if outside
+                test    sprt, a     wc          ' check pixel visibility
+    if_c        wrbyte  ctmp, ptra              ' overwrite if visible
+                add     ptra, #1                ' move to next location
+    if_c_and_nz wrbyte  ctmp, ptra              ' repeat if magnify (Z=0)
+    if_nz       add     ptra, #1                ' |
 .l1             shr     a, #1
                 add     x, #1
 .end_draw
 
-                sub     lcnt, #1    wz
+                sub     lcnt, #1    wz          ' limit sprites on scanline
     if_z        ret
 
-.next           add     regs+5, #4
-                djnz    ccnt, #.loop
-
+.next           djnz    ccnt, #.loop
                 ret
 
 _regs           long    0
@@ -310,6 +322,7 @@ scnt            res     1
 ccnt            res     1
 lcnt            res     1
 ecnt            res     1
+loff            res     1
 
 ctmp            res     1
 cbuf            res     4
