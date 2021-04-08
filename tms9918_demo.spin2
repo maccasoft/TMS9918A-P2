@@ -7,6 +7,7 @@
 }
 CON
     _clkfreq    = 160_000_000
+    video_pin   = 32+7*3 addpins 1
 
 VAR
 
@@ -16,11 +17,12 @@ VAR
 
 OBJ
 
-    tms   : "tms9918"
+    tms   : "tms9918_cvbs"
 
 PUB main() | cog, addr, ra, ri
 
-    tms.start(@tms_regs, @tms_vram, @tms_bitmap)
+    tms.start(0, 378, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' NTSC
+    'tms.start(1, 416, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' PAL
 
     ' initialize registers for multicolor mode
     bytemove(@tms_regs, @TMSMCREG, 8)
@@ -44,6 +46,7 @@ PUB main() | cog, addr, ra, ri
     addr := @ANIMATION
     repeat
         waitatn() ' wait for frame update, adjust for speed
+        waitatn()
         waitatn()
         waitatn()
         bytemove(@tms_vram + $0000, addr, $600)
