@@ -1,7 +1,7 @@
 {
     TMS9918 Emulation
     PAL / NTSC Video Driver by Chip Gracey
-    Tweaked by Marco Maccaferri <macca@maccasoft.com>
+    Tweakes and VDP Emulation by Marco Maccaferri <macca@maccasoft.com>
 }
 CON
 
@@ -11,8 +11,9 @@ CON
     x_tweak     = 0
     y_tweak     = 0
 
-PUB start(pal, x_total, tms_regs, tms_vram, bitmap, pin) | dotf, dotps, i
+PUB start(pal, tms_regs, tms_vram, bitmap, pin) | x_total, dotf, dotps, i
 
+    x_total := pal ? 416 : 378
     dotf := muldiv64(x_total, pal ? pal_cf * 4 * 128 : ntsc_cf * 4 * 128, pal ? pal_cc : ntsc_cc) 'compute pixel clock * 128
     dotps := muldiv64(1_000_000, 128_000_000, dotf)     'compute ps per pixel clock
 
@@ -75,6 +76,7 @@ PUB start(pal, x_total, tms_regs, tms_vram, bitmap, pin) | dotf, dotps, i
 
     _tms_regs := tms_regs
     _tms_vram := tms_vram
+    _tms_start := _bl - 2
     _tms_bitmap := bitmap
     _tms_palette := @tms_palette
 
@@ -127,8 +129,8 @@ pal_ntsc
 '
 ' Main program
 '
-loop            pollatn                 wcz     ' wait for frame sync
-    if_nc       jmp     #loop
+loop            cmp     cs, _tms_start  wcz     ' wait for frame sync
+    if_nz       jmp     #loop
 
                 drvh    #0
                 mov     ptra, _tms_regs
@@ -167,6 +169,7 @@ loop            pollatn                 wcz     ' wait for frame sync
                 mov     ptrv, _tms_bitmap
 
 scanline
+                mov     tg, cs
                 mov     ptra, ptrv
 
                 test    regs+1, #TMSMODE2    wz ' multicolor mode
@@ -201,11 +204,13 @@ text_mode
                 mergew  a
                 mov     cbuf+0, ctmp
                 movbyts cbuf+0, a
-                wrlong  cbuf+0, ptra++
                 shr     a, #8
                 mov     cbuf+1, ctmp
                 movbyts cbuf+1, a
-                wrword  cbuf+1, ptra++
+
+                setq    #1
+                wrlong  cbuf+0, ptra++
+                sub     ptra, #2
 
                 djnz    ecnt, #.loop
 
@@ -241,9 +246,10 @@ multicolor_mode
     if_z        setnib  cbuf+0, regs+7, #0
 
                 movbyts cbuf+0, #%%0000
-                wrlong  cbuf+0, ptra++
                 movbyts cbuf+1, #%%0000
-                wrlong  cbuf+1, ptra++
+
+                setq    #1
+                wrlong  cbuf+0, ptra++
 
                 djnz    ecnt, #.loop
 
@@ -253,13 +259,12 @@ multicolor_mode
                 jmp     #sprites
 
 graphics_mode
-                mov     b, loff
-
                 test    regs+0, #TMSMODE3    wz ' graphics mode II
     if_nz       mov     a, scnt
     if_nz       shr     a, #6                   ' divide by 64 (8 rows by 8 pixels)
     if_nz       shl     a, #11                  ' multiply by 2048
-    if_nz       add     b, a
+                mov     b, loff                 ' offset into pattern table
+    if_nz       add     b, a                    ' add mode II pattern table offset
 
                 test    regs+0, #TMSMODE3 wz    ' graphics mode II
                 bitnz   .shlr, #21              ' patch shl(0)/shr(1)
@@ -294,10 +299,11 @@ graphics_mode
                 shr     a, #24
                 mergew  a
                 movbyts cbuf+0, a
-                wrlong  cbuf+0, ptra++
                 shr     a, #8
                 movbyts cbuf+1, a
-                wrlong  cbuf+1, ptra++
+
+                setq    #1
+                wrlong  cbuf+0, ptra++
 
                 djnz    ecnt, #.loop
 
@@ -382,7 +388,7 @@ sprites
                 test    sprt, a     wc          ' check pixel visibility
     if_c        wrbyte  ctmp, ptra              ' overwrite if visible
                 add     ptra, #1                ' move to next location
-    if_c_and_nz wrbyte  ctmp, ptra              ' repeat if magnify (Z=0)
+    if_nz_and_c wrbyte  ctmp, ptra              ' repeat if magnify (Z=0)
     if_nz       add     ptra, #1                ' |
 .l1             shr     a, #1
                 add     x, #1
@@ -397,6 +403,10 @@ sprites
 end_scanline
                 add     ptrv, #256
                 incmod  loff, #7
+
+.wait           cmp     tg, cs          wcz
+    if_z        jmp     #.wait
+
                 incmod  scnt, #192-1    wc
     if_nc       jmp     #scanline
 
@@ -448,11 +458,8 @@ top             xcont   _bs, #1                 'horizontal sync
    if_c         xcont   _db, #1
    if_nc        xcont   _bb, _tms_back
 
-                cmp     cx, #2          wcz
-   if_z         cogatn  _tms_atn                'wakeup rendering
-                resi1
-
                 add     cs, #1
+                resi1
                 djnz    cx, #top
 
                 mov     cx, #0                  'visible lines
@@ -485,6 +492,8 @@ line            xcont   _bs, #1                 'horizontal sync
                 resi1
                 xcont   _av, _tms_back          'after-visible spacer
                 resi1
+
+                add     cs, #1
                 incmod  cx, #y_pixels-1 wc      'another line?
         if_nc   jmp     #line
 
@@ -513,8 +522,11 @@ bottom          xcont   _bs, #1                 'horizontal sync
                 resi1
                 xcont   _bb, _tms_back
                 resi1
+
+                add     cs, #1
                 djnz    cx, #bottom
 
+                drvnot  #1
                 cogatn  #%00000001              'signal vertical sync to cog0
 
                 test    _md, #%010      wc      'toggle field?
@@ -562,6 +574,7 @@ dacmode         long    p_dac_75r_2v+p_channel  '%0000_0000_000_101110000xxxx_01
 cx              long    0
 cy              long    0
 cs              long    0
+tg              long    0
 
 _md             long    0       'mode (bits 2/1/0 : pal/interlace/field)
 _cb             long    0       'colorburst reference color
@@ -598,6 +611,7 @@ _tms_back       long    0       'backdrop/border color
 
 _tms_regs       long    0
 _tms_vram       long    0
+_tms_start      long    0
 _tms_bitmap     long    0
 _tms_palette    long    0
 

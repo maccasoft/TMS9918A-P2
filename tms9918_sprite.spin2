@@ -45,8 +45,8 @@ OBJ
 
 PUB main()
 
-    tms.start(0, 378, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' NTSC
-    'tms.start(1, 416, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' PAL
+    'tms.start(0, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' NTSC
+    tms.start(1, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' PAL
 
     ' initialize registers for graphics mode
     bytemove(@tms_regs, @TMSBITMAPREG, 8)
