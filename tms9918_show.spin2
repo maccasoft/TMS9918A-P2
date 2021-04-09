@@ -1,0 +1,79 @@
+{
+    TMS9918 Sprite Demo
+    Written by Marco Maccaferri <macca@maccasoft.com>
+}
+CON
+    _clkfreq    = 160_000_000
+    video_pin   = 32+7*3 addpins 1
+
+    ' color constants
+
+    TMSTRANSPARENT  =  $00
+    TMSBLACK        =  $01
+    TMSMEDGREEN     =  $02
+    TMSLIGHTGREEN   =  $03
+    TMSDARKBLUE     =  $04
+    TMSLIGHTBLUE    =  $05
+    TMSDARKRED      =  $06
+    TMSCYAN         =  $07
+    TMSMEDRED       =  $08
+    TMSLIGHTRED     =  $09
+    TMSDARKYELLOW   =  $0A
+    TMSLIGHTYELLOW  =  $0B
+    TMSDARKGREEN    =  $0C
+    TMSMAGENTA      =  $0D
+    TMSGRAY         =  $0E
+    TMSWHITE        =  $0F
+
+    FRAMETICKS      =  6                 ' number of interrupts per animation frame
+    FRAMECOUNT      =  8                 ' number of frames in animation
+
+VAR
+
+    byte tms_regs[8]
+    byte tms_vram[16384]
+    byte tms_bitmap[256 * 192]
+
+    byte TICKCOUNTER    ' interrupt down counter
+    byte CURRFRAME      ' current frame of animation
+    byte XDELTA         ' direction of x axis motion
+    byte YDELTA         ' directino of y axis motion
+
+OBJ
+
+    tms   : "tms9918_cvbs"
+
+PUB main() | regp, vramp
+
+    'tms.start(0, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' NTSC
+    tms.start(1, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' PAL
+
+    repeat
+        regp := @tms9918_regs
+        vramp := @tms9918_vram
+
+        repeat 4
+            waitatn()
+            longmove(@tms_regs, regp, 2)
+            longmove(@tms_vram, vramp, 4096)
+
+            regp += 8
+            vramp += 16384
+
+            waitms(5000)
+
+DAT
+
+                orgh
+
+tms9918_regs
+                file    "tms9918_ascii.regs"
+                file    "tms9918_nyan.regs"
+                file    "tms9918_mandel.regs"
+                file    "tms9918_bombjack.regs"
+
+tms9918_vram
+                file    "tms9918_ascii.vram"
+                file    "tms9918_nyan.vram"
+                file    "tms9918_mandel.vram"
+                file    "tms9918_bombjack.vram"
