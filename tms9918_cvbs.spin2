@@ -130,7 +130,8 @@ pal_ntsc
 '
 ' Main program
 '
-loop            cmp     _cl, scnt        wcz
+loop
+                cmp     _cl, scnt        wcz
     if_z        jmp     #loop
 
                 mov     scol, scol+1
@@ -151,29 +152,30 @@ loop            cmp     _cl, scnt        wcz
     if_nc       jmp     #loop
     if_nz       jmp     #scanline
 
-                rdbyte  regs+0, ptra[0]
-                rdbyte  regs+1, ptra[1]
+                setq    #1                      ' read regs into temp buffer
+                rdlong  sbuf, _tms_regs         ' |
 
+                getbyte regs+0, sbuf, #0
                 test    regs+0, #TMSMODE3    wz ' graphics mode II
-
-                rdbyte  regs+2, ptra[2]
+                getbyte regs+1, sbuf, #1
+                getbyte regs+2, sbuf, #2
                 shl     regs+2, #10             ' name table base address * $400
-                rdbyte  regs+3, ptra[3]
+                add     regs+2, _tms_vram
+                getbyte regs+3, sbuf, #3
                 shl     regs+3, #6              ' color table base address * $40
     if_nz       andn    regs+3, vdp_8k_mask     ' limit color table to 8k boundaries
-                rdbyte  regs+4, ptra[4]
+                add     regs+3, _tms_vram
+                getbyte regs+4, sbuf+1, #0
                 shl     regs+4, #11             ' pattern generator base address * $800
     if_nz       andn    regs+4, vdp_8k_mask     ' limit pattern table to 8k boundaries
-                rdbyte  regs+5, ptra[5]
-                shl     regs+5, #7              ' sprite attribute table base address * $80
-                rdbyte  regs+6, ptra[6]
-                shl     regs+6, #11             ' sprite pattern generator base address * $800
-
-                add     regs+2, _tms_vram
-                add     regs+3, _tms_vram
                 add     regs+4, _tms_vram
+                getbyte regs+5, sbuf+1, #1
+                shl     regs+5, #7              ' sprite attribute table base address * $80
                 add     regs+5, _tms_vram
+                getbyte regs+6, sbuf+1, #2
+                shl     regs+6, #11             ' sprite pattern generator base address * $800
                 add     regs+6, _tms_vram
+                getbyte regs+7, sbuf+1, #3
 
                 setq    #32-1                   ' read all sprite attribute table
                 rdlong  sbuf, regs+5
@@ -393,18 +395,25 @@ sprites
     if_nz       shl     a, #8
 
                 test    regs+1, #TMSSPRMAG  wz  ' Z=!magnify
+                bitz    .mag, #(3 << 5) | 9     ' set skip bits
 
-.draw           cmps    x, #0       wc          ' check pixel outside left border
-    if_c        jmp     #.l1                    ' skip if outside
-                cmps    x, #256     wc          ' check pixel outside right border
+.draw           cmps    x, #256     wc          ' check pixel outside right border
     if_nc       jmp     #.end_draw              ' nothing more to do if outside
-                test    sprt, a     wc          ' check pixel visibility
-    if_c        wrbyte  ctmp, ptra              ' overwrite if visible
+
+                test    sprt, a     wz          ' check pixel visibility
+
+                cmps    x, #0       wc          ' check pixel outside left border
+  if_nc_and_nz  wrbyte  ctmp, ptra              ' overwrite if visible
                 add     ptra, #1                ' move to next location
-    if_nz_and_c wrbyte  ctmp, ptra              ' repeat if magnify (Z=0)
-    if_nz       add     ptra, #1                ' |
-.l1             shr     a, #1
                 add     x, #1
+
+.mag            skip    #%1111
+                cmps    x, #0       wc          ' check pixel outside left border
+  if_nc_and_nz  wrbyte  ctmp, ptra              ' overwrite if visible
+                add     ptra, #1                ' move to next location
+                add     x, #1
+
+                shr     a, #1
                 djnz    ecnt, #.draw
 .end_draw
 
@@ -447,12 +456,6 @@ top             xcont   _bs, #1                 'horizontal sync
                 resi1
                 xcont   _ac, #1
 
-'                mov     scol, _tms_regs
-'                add     scol, #7
-'                rdbyte  scol, scol              'get tms color register
-'                and     scol, #$0F              'mask backdrop color
-'                movbyts scol, #0                'set border color
-
                 resi1
                 cmp     _cl, #16       wcz
    if_c         xcont   _db, #1
@@ -480,11 +483,6 @@ line            xcont   _bs, #1                 'horizontal sync
                 resi1
                 xcont   _ac, #1
 
-'                mov     scol, _tms_regs
-'                add     scol, #7
-'                rdbyte  scol, scol    'get tms color register
-'                and     scol, #$0F         'mask backdrop color
-'                movbyts scol, #0           'set border color
                 resi1
                 xcont   _bv, scol          'before-visible spacer
                 resi1
@@ -512,12 +510,6 @@ bottom          xcont   _bs, #1                 'horizontal sync
 
                 resi1
                 xcont   _ac, #1
-
-'                mov     scol, _tms_regs
-'                add     scol, #7
-'                rdbyte  scol, scol    'get tms color register
-'                and     scol, #$0F         'mask backdrop color
-'                movbyts scol, #0           'set border color
 
                 resi1
                 xcont   _bb, scol
