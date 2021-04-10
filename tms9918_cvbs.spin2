@@ -68,7 +68,7 @@ PUB start(pal, tms_regs, tms_vram, bitmap, pin) | x_total, dotf, dotps, i
     i  := pal ? pal_dl : ntsc_dl                          'compute vertical lines
     _bl := (i - y_pixels) / 2 + y_tweak
     _al := i - y_pixels - _bl
-    _bl += 10                                              '+10 for ntsc
+    _bl += pal ? 18 : 10                                  '+10 for ntsc
 
     debug(udec(_bl, y_pixels, _al, i))
 
@@ -76,7 +76,8 @@ PUB start(pal, tms_regs, tms_vram, bitmap, pin) | x_total, dotf, dotps, i
 
     _tms_regs := tms_regs
     _tms_vram := tms_vram
-    _tms_start := _bl - 2
+    _tms_first := _bl
+    _tms_last := _tms_first + 192
     _tms_bitmap := bitmap
     _tms_palette := @tms_palette
 
@@ -116,7 +117,6 @@ pal_ntsc
                 setxfrq _xf                     'set transfer frequency
 
                 cogid   cx                      'install cogid into dacmode
-                decod   _tms_atn, cx
                 setnib  dacmode,cx,#2
                 wrpin   dacmode,_pn             'enable dac mode in pin(s)
                 drvl    _pn                     'enable dac output(s)
@@ -124,16 +124,32 @@ pal_ntsc
                 mov     ijmp1,#field            'set up streamer-empty interrupt
                 setint1 #10
 
+                mov     scol, #0
                 xcont   #10,#0                  'do streamer instruction to start interrupt sequence
 '
 '
 ' Main program
 '
-loop            cmp     cs, _tms_start  wcz     ' wait for frame sync
-    if_nz       jmp     #loop
+loop            cmp     _cl, scnt        wcz
+    if_z        jmp     #loop
 
-                drvh    #0
+                mov     scol, scol+1
+
                 mov     ptra, _tms_regs
+
+                rdbyte  regs+7, ptra[7]
+                mov     a, regs+7
+                and     a, #$0F
+                movbyts a, #0
+                mov     scol+1, a
+
+                mov     scnt, _cl
+
+                cmp     _cl, _tms_first  wcz   ' wait for frame sync
+    if_c        jmp     #loop
+                cmp     _cl, _tms_last   wc
+    if_nc       jmp     #loop
+    if_nz       jmp     #scanline
 
                 rdbyte  regs+0, ptra[0]
                 rdbyte  regs+1, ptra[1]
@@ -153,8 +169,6 @@ loop            cmp     cs, _tms_start  wcz     ' wait for frame sync
                 rdbyte  regs+6, ptra[6]
                 shl     regs+6, #11             ' sprite pattern generator base address * $800
 
-                rdbyte  regs+7, ptra[7]
-
                 add     regs+2, _tms_vram
                 add     regs+3, _tms_vram
                 add     regs+4, _tms_vram
@@ -165,11 +179,10 @@ loop            cmp     cs, _tms_start  wcz     ' wait for frame sync
                 rdlong  sbuf, regs+5
 
                 mov     loff, #0
-                mov     scnt, #0
+                mov     lcnt, #0
                 mov     ptrv, _tms_bitmap
 
 scanline
-                mov     tg, cs
                 mov     ptra, ptrv
 
                 test    regs+1, #TMSMODE2    wz ' multicolor mode
@@ -225,7 +238,7 @@ text_mode
                 jmp     #end_scanline
 
 multicolor_mode
-                mov     a, scnt
+                mov     a, lcnt
                 shr     a, #2
                 and     a, #$07
 
@@ -260,7 +273,7 @@ multicolor_mode
 
 graphics_mode
                 test    regs+0, #TMSMODE3    wz ' graphics mode II
-    if_nz       mov     a, scnt
+    if_nz       mov     a, lcnt
     if_nz       shr     a, #6                   ' divide by 64 (8 rows by 8 pixels)
     if_nz       shl     a, #11                  ' multiply by 2048
                 mov     b, loff                 ' offset into pattern table
@@ -313,7 +326,7 @@ graphics_mode
                 ' fall through
 
 sprites
-                mov     lcnt, #4                ' sprite scanline limit
+                mov     vcnt, #4                ' sprite scanline limit
                 mov     ccnt, #TMSSPRITES       ' number of sprites
 
                 sets    .loop, #sbuf
@@ -338,7 +351,7 @@ sprites
                 cmp     y, #$D0 wz              ' end of sprites processing
     if_z        jmp     #end_scanline
 
-                mov     a, scnt                 ' check sprite scanline visibility
+                mov     a, lcnt                 ' check sprite scanline visibility
                 subs    a, y    wc
     if_c        jmp     #.next
                 cmp     a, b    wc
@@ -395,7 +408,7 @@ sprites
                 djnz    ecnt, #.draw
 .end_draw
 
-                sub     lcnt, #1    wz          ' limit sprites on scanline
+                sub     vcnt, #1    wz          ' limit sprites on scanline
     if_z        jmp     #end_scanline
 
 .next           djnz    ccnt, #.loop
@@ -403,14 +416,7 @@ sprites
 end_scanline
                 add     ptrv, #256
                 incmod  loff, #7
-
-.wait           cmp     tg, cs          wcz
-    if_z        jmp     #.wait
-
-                incmod  scnt, #192-1    wc
-    if_nc       jmp     #scanline
-
-                drvl    #0
+                incmod  lcnt, #192-1
                 jmp     #loop
 '
 '
@@ -424,17 +430,11 @@ end_scanline
 '       111     PAL interlaced field1:  6H, 5L, 5H, B(17), F1(288)
 '
 field
-                mov     cs, #0
-
                 mov     cx,_bl                  'before-visible blank lines (already +10 for ntsc)
-                test    _md, #%100      wz      'if pal and field0 (%1x0), +6 top blanks
-                test    _md, #%001      wc      'if pal and field1 (%1x1), +7 top blanks
-        if_nz   addx    cx, #6
-        if_nz   add     cx, #2                  'fixes pal colors (?)
-
 top             xcont   _bs, #1                 'horizontal sync
                 resi1
                 xcont   _ds, #2
+                add     _cl, #1
                 resi1
                 xcont   _bc, #1
                 resi1
@@ -447,18 +447,17 @@ top             xcont   _bs, #1                 'horizontal sync
                 resi1
                 xcont   _ac, #1
 
-                mov     _tms_back, _tms_regs
-                add     _tms_back, #7
-                rdbyte  _tms_back, _tms_back    'get tms color register
-                and     _tms_back, #$0F         'mask backdrop color
-                movbyts _tms_back, #0           'set border color
+'                mov     scol, _tms_regs
+'                add     scol, #7
+'                rdbyte  scol, scol              'get tms color register
+'                and     scol, #$0F              'mask backdrop color
+'                movbyts scol, #0                'set border color
 
                 resi1
-                cmp     cs, #16         wcz
+                cmp     _cl, #16       wcz
    if_c         xcont   _db, #1
-   if_nc        xcont   _bb, _tms_back
+   if_nc        xcont   _bb, scol
 
-                add     cs, #1
                 resi1
                 djnz    cx, #top
 
@@ -468,6 +467,7 @@ top             xcont   _bs, #1                 'horizontal sync
 line            xcont   _bs, #1                 'horizontal sync
                 resi1
                 xcont   _ds, #2
+                add     _cl, #1
                 resi1
                 xcont   _bc, #1
                 resi1
@@ -480,20 +480,19 @@ line            xcont   _bs, #1                 'horizontal sync
                 resi1
                 xcont   _ac, #1
 
-                mov     _tms_back, _tms_regs
-                add     _tms_back, #7
-                rdbyte  _tms_back, _tms_back    'get tms color register
-                and     _tms_back, #$0F         'mask backdrop color
-                movbyts _tms_back, #0           'set border color
+'                mov     scol, _tms_regs
+'                add     scol, #7
+'                rdbyte  scol, scol    'get tms color register
+'                and     scol, #$0F         'mask backdrop color
+'                movbyts scol, #0           'set border color
                 resi1
-                xcont   _bv, _tms_back          'before-visible spacer
+                xcont   _bv, scol          'before-visible spacer
                 resi1
                 xcont   _dv, #0                 'visible line
                 resi1
-                xcont   _av, _tms_back          'after-visible spacer
+                xcont   _av, scol          'after-visible spacer
                 resi1
 
-                add     cs, #1
                 incmod  cx, #y_pixels-1 wc      'another line?
         if_nc   jmp     #line
 
@@ -501,6 +500,7 @@ line            xcont   _bs, #1                 'horizontal sync
 bottom          xcont   _bs, #1                 'horizontal sync
                 resi1
                 xcont   _ds, #2
+                add     _cl, #1
                 resi1
                 xcont   _bc, #1
                 resi1
@@ -513,17 +513,16 @@ bottom          xcont   _bs, #1                 'horizontal sync
                 resi1
                 xcont   _ac, #1
 
-                mov     _tms_back, _tms_regs
-                add     _tms_back, #7
-                rdbyte  _tms_back, _tms_back    'get tms color register
-                and     _tms_back, #$0F         'mask backdrop color
-                movbyts _tms_back, #0           'set border color
+'                mov     scol, _tms_regs
+'                add     scol, #7
+'                rdbyte  scol, scol    'get tms color register
+'                and     scol, #$0F         'mask backdrop color
+'                movbyts scol, #0           'set border color
 
                 resi1
-                xcont   _bb, _tms_back
+                xcont   _bb, scol
                 resi1
 
-                add     cs, #1
                 djnz    cx, #bottom
 
                 drvnot  #1
@@ -552,6 +551,8 @@ vlow            xcont   _bs,#1
                 resi1
                 djnz    cx,#vlow
 
+                mov     _cl, #0
+
                 mov     cx,_vs                  'final high vertical syncs
 vhigh2          xcont   _bs,#1
                 resi1
@@ -573,8 +574,6 @@ dacmode         long    p_dac_75r_2v+p_channel  '%0000_0000_000_101110000xxxx_01
 
 cx              long    0
 cy              long    0
-cs              long    0
-tg              long    0
 
 _md             long    0       'mode (bits 2/1/0 : pal/interlace/field)
 _cb             long    0       'colorburst reference color
@@ -604,14 +603,13 @@ _ml             long    0       'mandatory blank lines
 _rl             long    0       'retrace lines
 _bl             long    0       'before-visible lines
 _al             long    0       'after-visible lines
+_cl             long    0       'current line
 _pn             long    0       'pin(s)
-
-_tms_atn        long    0       'cog attention
-_tms_back       long    0       'backdrop/border color
 
 _tms_regs       long    0
 _tms_vram       long    0
-_tms_start      long    0
+_tms_first      long    0
+_tms_last       long    0
 _tms_bitmap     long    0
 _tms_palette    long    0
 
@@ -627,10 +625,13 @@ x               res     1
 y               res     1
 
 scnt            res     1
-ccnt            res     1
+scol            res     2       'backdrop/border color
+
 lcnt            res     1
-ecnt            res     1
 loff            res     1
+ccnt            res     1
+vcnt            res     1
+ecnt            res     1
 
 ctmp            res     1
 cbuf            res     4

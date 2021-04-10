@@ -60,7 +60,7 @@ PUB main() | regp, vramp
             regp += 8
             vramp += 16384
 
-            waitms(5000)
+            waitms(10_000)
 
 DAT
 
