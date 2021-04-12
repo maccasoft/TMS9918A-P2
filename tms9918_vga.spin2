@@ -1,0 +1,584 @@
+'*****************************************
+'*  VGA 640 x 480 - 80 x 40 text driver  *
+'*****************************************
+
+CON
+
+  intensity     = 80    '0..128
+  fpix          = 12_500_000
+
+PUB start(tms_regs, tms_vram, bitmap, pin)
+
+    _pn  := pin & $38
+
+    _tms_regs := tms_regs
+    _tms_vram := tms_vram
+    _tms_first := 24
+    _tms_last := _tms_first + 192
+    _tms_bitmap := @bitmap
+    _tms_palette := @tms_palette
+
+    coginit(16, @driver, 0)
+
+DAT             orgh
+
+tms_palette     long    $00_00_00_00
+                long    $00_00_00_00
+                long    $20_C0_20_00
+                long    $60_E0_60_00
+                long    $20_20_E0_00
+                long    $40_60_E0_00
+                long    $A0_20_20_00
+                long    $40_C0_E0_00
+                long    $E0_20_20_00
+                long    $E0_60_60_00
+                long    $C0_C0_20_00
+                long    $C0_C0_80_00
+                long    $20_80_20_00
+                long    $C0_40_A0_00
+                long    $A0_A0_A0_00
+                long    $E0_E0_E0_00
+'
+'
+' Driver
+'
+DAT             org
+
+driver
+                setq2   #$10 - 1                'load palette into lut
+                rdlong  0,_tms_palette
+
+                rdlong  pa,#@clkfreq            'calculate streamer frequency
+                qfrac   ##fpix,pa
+                getqx   pa
+                shr     pa,#1
+                setxfrq pa
+
+                setcy   ##intensity << 24       'r      set colorspace for rgb
+                setci   ##intensity << 16       'g
+                setcq   ##intensity << 08       'b
+
+                setcmod #%01_0_000_0            'enable colorspace conversion
+
+                cogid   cx                      'insert cogid into dac modes
+                setnib  dacmode_s,cx,#2
+                setnib  dacmode_c,cx,#2
+
+                wrpin   dacmode_s,_pn   'enable 123-ohm 3.3V dac mode in pin +0
+
+                xor     _pn,#2<<6|1     'enable 75-ohm 2.0V dac mode in pins +1..3
+                wrpin   dacmode_c,_pn
+
+                xor     _pn,#3<<6 ^(2<<6|1)     'make pins +0..3 outputs
+                drvl    _pn
+
+                xor     _pn,#4|(3<<6)   'leave av_base pointing to pin +4 (vertical sync)
+
+                mov     ijmp1,#field            'set up streamer-empty interrupt
+                setint1 #10
+
+                mov     scol, #0
+                xcont   #10,#0                  'do streamer instruction to start interrupt sequence
+'
+'
+' Main program
+'
+loop
+                cmp     _cl, scnt        wcz
+    if_z        jmp     #loop
+
+                mov     scol, scol+1
+
+                mov     ptra, _tms_regs
+
+                rdbyte  regs+7, ptra[7]
+                mov     a, regs+7
+                and     a, #$0F
+                movbyts a, #0
+                mov     scol+1, a
+
+                mov     scnt, _cl
+
+                cmp     _cl, _tms_first  wcz   ' wait for frame sync
+    if_c        jmp     #loop
+                cmp     _cl, _tms_last   wc
+    if_nc       jmp     #loop
+    if_nz       jmp     #scanline
+
+                setq    #1                      ' read regs into temp buffer
+                rdlong  sbuf, _tms_regs         ' |
+
+                getbyte regs+0, sbuf, #0
+                test    regs+0, #TMSMODE3    wz ' graphics mode II
+                getbyte regs+1, sbuf, #1
+                getbyte regs+2, sbuf, #2
+                shl     regs+2, #10             ' name table base address * $400
+                add     regs+2, _tms_vram
+                getbyte regs+3, sbuf, #3
+                shl     regs+3, #6              ' color table base address * $40
+    if_nz       andn    regs+3, vdp_8k_mask     ' limit color table to 8k boundaries
+                add     regs+3, _tms_vram
+                getbyte regs+4, sbuf+1, #0
+                shl     regs+4, #11             ' pattern generator base address * $800
+    if_nz       andn    regs+4, vdp_8k_mask     ' limit pattern table to 8k boundaries
+                add     regs+4, _tms_vram
+                getbyte regs+5, sbuf+1, #1
+                shl     regs+5, #7              ' sprite attribute table base address * $80
+                add     regs+5, _tms_vram
+                getbyte regs+6, sbuf+1, #2
+                shl     regs+6, #11             ' sprite pattern generator base address * $800
+                add     regs+6, _tms_vram
+                getbyte regs+7, sbuf+1, #3
+
+                setq    #32-1                   ' read all sprite attribute table
+                rdlong  sbuf, regs+5
+
+                mov     loff, #0
+                mov     lcnt, #0
+                mov     ptrv, _tms_bitmap
+
+scanline
+                mov     ptra, ptrv
+
+                test    regs+1, #TMSMODE2    wz ' multicolor mode
+    if_nz       jmp     #multicolor_mode
+
+                test    regs+1, #TMSMODE1    wz ' text mode
+    if_z        jmp     #graphics_mode
+
+text_mode
+                mov     ctmp, regs+7            ' background color
+                and     ctmp, #$0F
+                mov     a, regs+7               ' foreground color
+                shr     a, #4
+                setbyte ctmp, a, #1
+
+                mov     cbuf+0, ctmp
+                movbyts cbuf+0, #0
+                wrlong  cbuf+0, ptra++
+                wrlong  cbuf+0, ptra++
+
+                mov     ptrb, regs+2
+
+                mov     ecnt, #40
+.loop           rdbyte  ptrc, ptrb++            ' read tile number to display
+                shl     ptrc, #3                ' 8 bytes per tile
+                add     ptrc, regs+4
+                add     ptrc, loff
+                rdbyte  a, ptrc                 ' pixels, 1 bit per pixel, from msb
+
+                rev     a
+                shr     a, #24
+                mergew  a
+                mov     cbuf+0, ctmp
+                movbyts cbuf+0, a
+                shr     a, #8
+                mov     cbuf+1, ctmp
+                movbyts cbuf+1, a
+
+                setq    #1
+                wrlong  cbuf+0, ptra++
+                sub     ptra, #2
+
+                djnz    ecnt, #.loop
+
+                mov     cbuf+0, ctmp
+                movbyts cbuf+0, #0
+                wrlong  cbuf+0, ptra++
+                wrlong  cbuf+0, ptra++
+
+                cmp     loff, #7        wz
+    if_z        add     regs+2, #40
+
+                jmp     #end_scanline
+
+multicolor_mode
+                mov     a, lcnt
+                shr     a, #2
+                and     a, #$07
+
+                mov     ptrb, regs+2
+
+                mov     ecnt, #32
+.loop           rdbyte  ptrc, ptrb++            ' read tile number to display
+                shl     ptrc, #3
+                add     ptrc, regs+4            ' points to color table
+                add     ptrc, a
+
+                rdbyte  cbuf+0, ptrc            ' colors
+
+                mov     cbuf+1, cbuf+0
+                and     cbuf+1, #$0F wz
+    if_z        setnib  cbuf+1, regs+7, #0
+                shr     cbuf+0, #4   wz
+    if_z        setnib  cbuf+0, regs+7, #0
+
+                movbyts cbuf+0, #%%0000
+                movbyts cbuf+1, #%%0000
+
+                setq    #1
+                wrlong  cbuf+0, ptra++
+
+                djnz    ecnt, #.loop
+
+                cmp     loff, #7        wz
+    if_z        add     regs+2, #32
+
+                jmp     #sprites
+
+graphics_mode
+                test    regs+0, #TMSMODE3    wz ' graphics mode II
+    if_nz       mov     a, lcnt
+    if_nz       shr     a, #6                   ' divide by 64 (8 rows by 8 pixels)
+    if_nz       shl     a, #11                  ' multiply by 2048
+                mov     b, loff                 ' offset into pattern table
+    if_nz       add     b, a                    ' add mode II pattern table offset
+
+                test    regs+0, #TMSMODE3 wz    ' graphics mode II
+                bitnz   .shlr, #21              ' patch shl(0)/shr(1)
+
+                mov     ptrb, regs+2
+
+                mov     ecnt, #32
+.loop           rdbyte  ptrc, ptrb++            ' read tile number to display
+
+                mov     ptrd, ptrc
+.shlr           shl     ptrd, #3
+                add     ptrd, regs+3            ' points to color table
+                add     ptrd, b
+                rdbyte  a, ptrd                 ' colors
+
+                getnib  cbuf+0, a, #0
+                and     cbuf+0, #$0F wz
+    if_z        setnib  cbuf+0, regs+7, #0
+                getnib  cbuf+1, a, #1
+                and     cbuf+1, #$0F wz
+    if_z        setnib  cbuf+1, regs+7, #0
+
+                setbyte cbuf+0, cbuf+1, #1
+                mov     cbuf+1, cbuf+0
+
+                shl     ptrc, #3                ' 8 bytes per tile
+                add     ptrc, regs+4
+                add     ptrc, b
+                rdbyte  a, ptrc                 ' pixels, 1 bit per pixel, from msb
+
+                rev     a
+                shr     a, #24
+                mergew  a
+                movbyts cbuf+0, a
+                shr     a, #8
+                movbyts cbuf+1, a
+
+                setq    #1
+                wrlong  cbuf+0, ptra++
+
+                djnz    ecnt, #.loop
+
+                cmp     loff, #7        wz
+    if_z        add     regs+2, #32
+
+                ' fall through
+
+sprites
+                mov     vcnt, #4                ' sprite scanline limit
+                mov     ccnt, #TMSSPRITES       ' number of sprites
+
+                sets    .loop, #sbuf
+
+                mov     b, #8
+                test    regs+1, #TMSSPRSIZE wz
+    if_nz       shl     b, #1
+                test    regs+1, #TMSSPRMAG  wz
+    if_nz       shl     b, #1
+
+.loop           mov     sprt, sbuf
+                add     .loop, #1
+
+                test    sprt, TMSSPRCOLOR wz    ' check sprite color
+    if_z        jmp     #.next                  ' skip if transparent
+
+                mov     y, sprt
+                shl     y, #24
+                sar     y, #24                  ' sign-extend y
+                cmps    y, neg_clip wc
+    if_c        and     y, #$FF                 ' max -32
+                cmp     y, #$D0 wz              ' end of sprites processing
+    if_z        jmp     #end_scanline
+
+                mov     a, lcnt                 ' check sprite scanline visibility
+                subs    a, y    wc
+    if_c        jmp     #.next
+                cmp     a, b    wc
+    if_nc       jmp     #.next
+
+                mov     ptrc, sprt
+                shr     ptrc, #16
+                and     ptrc, #$FF
+                shl     ptrc, #3
+                add     ptrc, regs+6
+                test    regs+1, #TMSSPRMAG  wz
+    if_nz       shr     a, #1
+                add     ptrc, a
+
+                mov     ctmp, sprt              ' set pixel color
+                shr     ctmp, #24
+                and     ctmp, #$0F          wz
+    if_z        setnib  ctmp, regs+7, #0
+
+                mov     x, sprt
+                shr     x, #8
+                and     x, #$FF
+                test    sprt, TMSEARLYCLK   wz
+    if_nz       sub     x, #32
+                mov     ptra, ptrv
+                add     ptra, x
+
+                test    regs+1, #TMSSPRSIZE wz
+    if_z        mov     ecnt, #8
+    if_nz       mov     ecnt, #16
+
+                rdbyte  sprt, ptrc
+    if_nz       shl     sprt, #8
+    if_nz       add     ptrc, #16
+    if_nz       rdbyte  a, ptrc
+    if_nz       or      sprt, a
+
+                mov     a, #$80
+    if_nz       shl     a, #8
+
+                test    regs+1, #TMSSPRMAG  wz  ' Z=!magnify
+                bitz    .mag, #(3 << 5) | 9     ' set skip bits
+
+.draw           cmps    x, #256     wc          ' check pixel outside right border
+    if_nc       jmp     #.end_draw              ' nothing more to do if outside
+
+                test    sprt, a     wz          ' check pixel visibility
+
+                cmps    x, #0       wc          ' check pixel outside left border
+  if_nc_and_nz  wrbyte  ctmp, ptra              ' overwrite if visible
+                add     ptra, #1                ' move to next location
+                add     x, #1
+
+.mag            skip    #%1111
+                cmps    x, #0       wc          ' check pixel outside left border
+  if_nc_and_nz  wrbyte  ctmp, ptra              ' overwrite if visible
+                add     ptra, #1                ' move to next location
+                add     x, #1
+
+                shr     a, #1
+                djnz    ecnt, #.draw
+.end_draw
+
+                sub     vcnt, #1    wz          ' limit sprites on scanline
+    if_z        jmp     #end_scanline
+
+.next           djnz    ccnt, #.loop
+
+end_scanline
+                add     ptrv, #256
+                incmod  loff, #7
+                incmod  lcnt, #192-1
+                jmp     #loop
+'
+'
+' Field loop
+'
+field
+                mov     cy,#24                  'before-visible blank lines
+.top            xcont   _as,#0                 'do before-visible part of scan line
+                add     _cl, #1
+                resi1
+                xcont   _vi,scol               'do visible part of scan line (blank)
+                resi1
+                xcont   _bs,#0                 'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                 'do sync part of scan line
+
+                resi1
+                xcont   _as,#0                 'do before-visible part of scan line
+                resi1
+                xcont   _vi,scol               'do visible part of scan line (blank)
+                resi1
+                xcont   _bs,#0                 'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                 'do sync part of scan line
+                resi1
+                djnz    cy,#.top
+
+                mov     _lb, _tms_bitmap
+
+                mov     cy,#192                 'visible lines
+.line           xcont   _as,#0                 'do before-visible part of scan line
+                add     _cl, #1
+
+                rdfast  #4, _lb                 'start reading pixels into fifo
+                resi1
+                xcont   _bv, scol
+                resi1
+                xcont   _dv, #0
+                resi1
+                xcont   _av, scol
+                resi1
+
+                xcont   _bs,#0                 'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                 'do sync part of scan line
+                resi1
+
+                ' duplicate line
+                xcont   _as,#0                 'do before-visible part of scan line
+                resi1
+                xcont   _bv, scol
+                resi1
+                xcont   _dv, #0
+                resi1
+                xcont   _av, scol
+                resi1
+                xcont   _bs,#0                 'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                 'do sync part of scan line
+
+                add     _lb, #256
+                resi1
+                djnz    cy,#.line
+
+                mov     cy,#24                  'after-visible blank lines
+.bottom         xcont   _as,#0                 'do before-visible part of scan line
+                add     _cl, #1
+                resi1
+                xcont   _vi,scol               'do visible part of scan line (blank)
+                resi1
+                xcont   _bs,#0                 'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                 'do sync part of scan line
+                resi1
+
+                xcont   _as,#0                 'do before-visible part of scan line
+                resi1
+                xcont   _vi,scol               'do visible part of scan line (blank)
+                resi1
+                xcont   _bs,#0                 'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                 'do sync part of scan line
+                resi1
+                djnz    cy,#.bottom
+
+                cogatn  #%00000001              'signal vertical sync to cog0
+
+                mov     cy, #10
+.blank1         xcont   _as,#0                 'do before-visible part of scan line
+                resi1
+                xcont   _vi,#0                 'do visible part of scan line (blank)
+                resi1
+                xcont   _bs,#0                 'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                 'do sync part of scan line
+                resi1
+                djnz    cy,#.blank1            'loop if more blanks needed
+
+                drvnot  _pn             'vertical sync on
+                mov     cy, #2
+.blank2         xcont   _as,#0                 'do before-visible part of scan line
+                resi1
+                xcont   _vi,#0                 'do visible part of scan line (blank)
+                resi1
+                xcont   _bs,#0                 'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                 'do sync part of scan line
+                resi1
+                djnz    cy,#.blank2            'loop if more blanks needed
+                drvnot  _pn             'vertical sync off
+
+                mov     _cl, #0
+
+                mov     cy, #33
+.blank3         xcont   _as,#0                 'do before-visible part of scan line
+                resi1
+                xcont   _vi,#0                 'do visible part of scan line (blank)
+                resi1
+                xcont   _bs,#0                 'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                 'do sync part of scan line
+                resi1
+                djnz    cy,#.blank3            'loop if more blanks needed
+
+                jmp     #field                 'loop
+'
+'
+' Data
+'
+dacmode_s       long    %0000_0000_000_1011000000000_01_00000_0         'hsync is 123-ohm, 3.3V
+dacmode_c       long    %0000_0000_000_1011100000000_01_00000_0         'R/G/B are 75-ohm, 2.0V
+
+cx              long    0
+cy              long    0
+
+_bs             long    $7F010000+8             'streamer command: before-sync
+_ds             long    $7F010000+48            'streamer command: during-sync
+_as             long    $7F010000+24            'streamer command: after sync
+_vi             long    $3F000000+320           'streamer command: visible
+_bv             long    $3F000000+32            'streamer command: before visible
+_dv             long    $7F080000+256           'streamer command: during visible
+_av             long    $3F000000+32            'streamer command: after visible
+_lb             long    0                       'line buffer pointer
+_cl             long    0       'current line
+_pn             long    0                       'base pin
+
+_tms_regs       long    0
+_tms_vram       long    0
+_tms_first      long    0
+_tms_last       long    0
+_tms_bitmap     long    0
+_tms_palette    long    0
+
+vdp_8k_mask     long    $1FFF
+neg_clip        long    -32
+
+TMSEARLYCLK     long    %10000000_00000000_00000000_00000000
+TMSSPRCOLOR     long    %00001111_00000000_00000000_00000000
+
+a               res     1
+b               res     1
+x               res     1
+y               res     1
+
+scnt            res     1
+scol            res     2       'backdrop/border color
+
+lcnt            res     1
+loff            res     1
+ccnt            res     1
+vcnt            res     1
+ecnt            res     1
+
+ctmp            res     1
+cbuf            res     4
+sprt            res     1
+
+ptrc            res     1
+ptrd            res     1
+ptrv            res     1
+
+regs            res     8
+sbuf            res     32
+
+                fit     $1F0
+
+CON
+
+    TMSMODE3   = %00000010      ' mode bit 3
+    TMSEXTVID  = %00000001      ' external video
+
+    ' register 1 control bits
+    TMS4K16K   = %10000000      ' 4/16K RAM
+    TMSBLANK   = %01000000      ' screen blank
+    TMSINTEN   = %00100000      ' interrupt enable
+    TMSMODE1   = %00010000      ' mode bit 1
+    TMSMODE2   = %00001000      ' mode bit 2
+    TMSSPRSIZE = %00000010      ' sprite size
+    TMSSPRMAG  = %00000001      ' sprite magnification
+
+    TMSVSYNC   = %10000000      ' framce sync
+
+    TMSSPRITES = 32
