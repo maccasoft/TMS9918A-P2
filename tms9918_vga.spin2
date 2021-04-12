@@ -1,7 +1,8 @@
-'*****************************************
-'*  VGA 640 x 480 - 80 x 40 text driver  *
-'*****************************************
-
+{
+    TMS9918 Emulation
+    Original VGA Video Driver by Chip Gracey
+    Tweakes and VDP Emulation by Marco Maccaferri <macca@maccasoft.com>
+}
 CON
 
   intensity     = 80    '0..128
@@ -38,41 +39,39 @@ tms_palette     long    $00_00_00_00
                 long    $C0_40_A0_00
                 long    $A0_A0_A0_00
                 long    $E0_E0_E0_00
-'
+
+DAT             org
 '
 ' Driver
 '
-DAT             org
-
 driver
                 setq2   #$10 - 1                'load palette into lut
                 rdlong  0,_tms_palette
 
-                rdlong  pa,#@clkfreq            'calculate streamer frequency
-                qfrac   ##fpix,pa
-                getqx   pa
-                shr     pa,#1
-                setxfrq pa
+                rdlong  _xf, #@clkfreq           'calculate streamer frequency
+                qfrac   ##fpix, _xf
+                getqx   _xf
+                shr     _xf, #1
 
+                setcmod #%01_0_000_0            'enable colorspace conversion
                 setcy   ##intensity << 24       'r      set colorspace for rgb
                 setci   ##intensity << 16       'g
                 setcq   ##intensity << 08       'b
-
-                setcmod #%01_0_000_0            'enable colorspace conversion
+                setxfrq _xf                     'set transfer frequency
 
                 cogid   cx                      'insert cogid into dac modes
                 setnib  dacmode_s,cx,#2
                 setnib  dacmode_c,cx,#2
 
-                wrpin   dacmode_s,_pn   'enable 123-ohm 3.3V dac mode in pin +0
+                wrpin   dacmode_s,_pn           'enable 123-ohm 3.3V dac mode in pin +0
 
-                xor     _pn,#2<<6|1     'enable 75-ohm 2.0V dac mode in pins +1..3
+                xor     _pn,#2<<6|1             'enable 75-ohm 2.0V dac mode in pins +1..3
                 wrpin   dacmode_c,_pn
 
                 xor     _pn,#3<<6 ^(2<<6|1)     'make pins +0..3 outputs
                 drvl    _pn
 
-                xor     _pn,#4|(3<<6)   'leave av_base pointing to pin +4 (vertical sync)
+                xor     _pn,#4|(3<<6)           'leave av_base pointing to pin +4 (vertical sync)
 
                 mov     ijmp1,#field            'set up streamer-empty interrupt
                 setint1 #10
@@ -335,40 +334,39 @@ sprites
                 add     ptra, x
 
                 test    regs+1, #TMSSPRSIZE wz
-    if_z        mov     ecnt, #8
-    if_nz       mov     ecnt, #16
+    if_z        mov     ecnt, #4
+    if_nz       mov     ecnt, #8
 
                 rdbyte  sprt, ptrc
-    if_nz       shl     sprt, #8
+                shl     sprt, #8
     if_nz       add     ptrc, #16
     if_nz       rdbyte  a, ptrc
     if_nz       or      sprt, a
 
-                mov     a, #$80
-    if_nz       shl     a, #8
+                test    regs+1, #TMSSPRMAG  wz
+    if_nz       setword sprt, sprt, #1
+    if_nz       mergew  sprt
+    if_z        shl     sprt, #16
 
-                test    regs+1, #TMSSPRMAG  wz  ' Z=!magnify
-                bitz    .mag, #(3 << 5) | 9     ' set skip bits
+                cmps    x, #0       wc
+    if_c        abs     x
+    if_c        add     ptra, x
+    if_c        sub     ecnt, x
+    if_c        shl     sprt, x
+    if_c        mov     x, #0
 
-.draw           cmps    x, #256     wc          ' check pixel outside right border
-    if_nc       jmp     #.end_draw              ' nothing more to do if outside
+                shl     ctmp, #8
+                rev     sprt
 
-                test    sprt, a     wz          ' check pixel visibility
-
-                cmps    x, #0       wc          ' check pixel outside left border
-  if_nc_and_nz  wrbyte  ctmp, ptra              ' overwrite if visible
-                add     ptra, #1                ' move to next location
-                add     x, #1
-
-.mag            skip    #%1111
-                cmps    x, #0       wc          ' check pixel outside left border
-  if_nc_and_nz  wrbyte  ctmp, ptra              ' overwrite if visible
-                add     ptra, #1                ' move to next location
-                add     x, #1
-
-                shr     a, #1
-                djnz    ecnt, #.draw
-.end_draw
+.draw           getnib  a, sprt, #0
+                mergew  a
+                mov     cbuf+0, ctmp
+                movbyts cbuf+0, a
+                wmlong  cbuf+0, ptra++
+                add     x, #4
+                cmp     x, #256     wc
+                shr     sprt, #4    wz
+    if_c_and_nz djnz    ecnt, #.draw
 
                 sub     vcnt, #1    wz          ' limit sprites on scanline
     if_z        jmp     #end_scanline
@@ -386,30 +384,12 @@ end_scanline
 '
 field
                 mov     cy,#24                  'before-visible blank lines
-.top            xcont   _as,#0                 'do before-visible part of scan line
-                add     _cl, #1
-                resi1
-                xcont   _vi,scol               'do visible part of scan line (blank)
-                resi1
-                xcont   _bs,#0                 'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                 'do sync part of scan line
-
-                resi1
-                xcont   _as,#0                 'do before-visible part of scan line
-                resi1
-                xcont   _vi,scol               'do visible part of scan line (blank)
-                resi1
-                xcont   _bs,#0                 'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                 'do sync part of scan line
-                resi1
-                djnz    cy,#.top
+                calld   border_ret, #border
 
                 mov     _lb, _tms_bitmap
 
                 mov     cy,#192                 'visible lines
-.line           xcont   _as,#0                 'do before-visible part of scan line
+.line           xcont   _as,#0                  'do before-visible part of scan line
                 add     _cl, #1
 
                 rdfast  #4, _lb                 'start reading pixels into fifo
@@ -444,66 +424,61 @@ field
                 djnz    cy,#.line
 
                 mov     cy,#24                  'after-visible blank lines
-.bottom         xcont   _as,#0                 'do before-visible part of scan line
-                add     _cl, #1
-                resi1
-                xcont   _vi,scol               'do visible part of scan line (blank)
-                resi1
-                xcont   _bs,#0                 'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                 'do sync part of scan line
-                resi1
-
-                xcont   _as,#0                 'do before-visible part of scan line
-                resi1
-                xcont   _vi,scol               'do visible part of scan line (blank)
-                resi1
-                xcont   _bs,#0                 'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                 'do sync part of scan line
-                resi1
-                djnz    cy,#.bottom
+                calld   border_ret, #border
 
                 cogatn  #%00000001              'signal vertical sync to cog0
 
                 mov     cy, #10
-.blank1         xcont   _as,#0                 'do before-visible part of scan line
-                resi1
-                xcont   _vi,#0                 'do visible part of scan line (blank)
-                resi1
-                xcont   _bs,#0                 'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                 'do sync part of scan line
-                resi1
-                djnz    cy,#.blank1            'loop if more blanks needed
+                calld   blank_ret, #blank
 
-                drvnot  _pn             'vertical sync on
+                drvnot  _pn                     'vertical sync on
                 mov     cy, #2
-.blank2         xcont   _as,#0                 'do before-visible part of scan line
-                resi1
-                xcont   _vi,#0                 'do visible part of scan line (blank)
-                resi1
-                xcont   _bs,#0                 'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                 'do sync part of scan line
-                resi1
-                djnz    cy,#.blank2            'loop if more blanks needed
-                drvnot  _pn             'vertical sync off
+                calld   blank_ret, #blank
+                drvnot  _pn                     'vertical sync off
 
                 mov     _cl, #0
 
                 mov     cy, #33
-.blank3         xcont   _as,#0                 'do before-visible part of scan line
-                resi1
-                xcont   _vi,#0                 'do visible part of scan line (blank)
-                resi1
-                xcont   _bs,#0                 'do before-sync part of scan line
-                resi1
-                xzero   _ds,#1                 'do sync part of scan line
-                resi1
-                djnz    cy,#.blank3            'loop if more blanks needed
+                calld   blank_ret, #blank
 
-                jmp     #field                 'loop
+                jmp     #field                  'loop
+'
+'
+' Subroutines
+'
+blank           xcont   _as,#0                  'do before-visible part of scan line
+                resi1
+                xcont   _vi,#0                  'do visible part of scan line (blank)
+                resi1
+                xcont   _bs,#0                  'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                  'do sync part of scan line
+                resi1
+                djnz    cy,#blank               'loop if more blanks needed
+                jmp     blank_ret
+blank_ret       long    0
+
+border          xcont   _as,#0                  'do before-visible part of scan line
+                add     _cl, #1
+                resi1
+                xcont   _vi,scol                'do visible part of scan line (blank)
+                resi1
+                xcont   _bs,#0                  'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                  'do sync part of scan line
+                resi1
+
+                xcont   _as,#0                  'do before-visible part of scan line
+                resi1
+                xcont   _vi,scol                'do visible part of scan line (blank)
+                resi1
+                xcont   _bs,#0                  'do before-sync part of scan line
+                resi1
+                xzero   _ds,#1                  'do sync part of scan line
+                resi1
+                djnz    cy,#border
+                jmp     border_ret
+border_ret      long    0
 '
 '
 ' Data
@@ -514,6 +489,7 @@ dacmode_c       long    %0000_0000_000_1011100000000_01_00000_0         'R/G/B a
 cx              long    0
 cy              long    0
 
+_xf             long    0                       'streamer frequency setting
 _bs             long    $7F010000+8             'streamer command: before-sync
 _ds             long    $7F010000+48            'streamer command: during-sync
 _as             long    $7F010000+24            'streamer command: after sync
@@ -522,7 +498,7 @@ _bv             long    $3F000000+32            'streamer command: before visibl
 _dv             long    $7F080000+256           'streamer command: during visible
 _av             long    $3F000000+32            'streamer command: after visible
 _lb             long    0                       'line buffer pointer
-_cl             long    0       'current line
+_cl             long    0                       'current line
 _pn             long    0                       'base pin
 
 _tms_regs       long    0
@@ -544,7 +520,7 @@ x               res     1
 y               res     1
 
 scnt            res     1
-scol            res     2       'backdrop/border color
+scol            res     2                       'backdrop/border color
 
 lcnt            res     1
 loff            res     1

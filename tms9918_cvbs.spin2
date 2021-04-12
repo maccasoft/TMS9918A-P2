@@ -81,7 +81,7 @@ PUB start(pal, tms_regs, tms_vram, bitmap, pin) | x_total, dotf, dotps, i
     _tms_bitmap := bitmap
     _tms_palette := @tms_palette
 
-    coginit(16, @pal_ntsc, 0)
+    coginit(16, @driver, 0)
 
 DAT             orgh
 
@@ -104,9 +104,9 @@ tms_palette     long    $00_00_00_00
 
 DAT             org
 '
-' Setup
+' Driver
 '
-pal_ntsc
+driver
                 setq2   #$10 - 1                'load palette into lut
                 rdlong  0,_tms_palette
 
@@ -359,63 +359,57 @@ sprites
                 cmp     a, b    wc
     if_nc       jmp     #.next
 
-                mov     ptrc, sprt
-                shr     ptrc, #16
-                and     ptrc, #$FF
+                getbyte ptrc, sprt, #2
                 shl     ptrc, #3
                 add     ptrc, regs+6
                 test    regs+1, #TMSSPRMAG  wz
     if_nz       shr     a, #1
                 add     ptrc, a
 
-                mov     ctmp, sprt              ' set pixel color
-                shr     ctmp, #24
+                getbyte ctmp, sprt, #3
                 and     ctmp, #$0F          wz
     if_z        setnib  ctmp, regs+7, #0
 
-                mov     x, sprt
-                shr     x, #8
-                and     x, #$FF
+                getbyte x, sprt, #1
                 test    sprt, TMSEARLYCLK   wz
     if_nz       sub     x, #32
                 mov     ptra, ptrv
                 add     ptra, x
 
                 test    regs+1, #TMSSPRSIZE wz
-    if_z        mov     ecnt, #8
-    if_nz       mov     ecnt, #16
+    if_z        mov     ecnt, #4
+    if_nz       mov     ecnt, #8
 
                 rdbyte  sprt, ptrc
-    if_nz       shl     sprt, #8
+                shl     sprt, #8
     if_nz       add     ptrc, #16
     if_nz       rdbyte  a, ptrc
     if_nz       or      sprt, a
 
-                mov     a, #$80
-    if_nz       shl     a, #8
+                test    regs+1, #TMSSPRMAG  wz
+    if_nz       setword sprt, sprt, #1
+    if_nz       mergew  sprt
+    if_z        shl     sprt, #16
 
-                test    regs+1, #TMSSPRMAG  wz  ' Z=!magnify
-                bitz    .mag, #(3 << 5) | 9     ' set skip bits
+                cmps    x, #0       wc
+    if_c        abs     x
+    if_c        add     ptra, x
+    if_c        sub     ecnt, x
+    if_c        shl     sprt, x
+    if_c        mov     x, #0
 
-.draw           cmps    x, #256     wc          ' check pixel outside right border
-    if_nc       jmp     #.end_draw              ' nothing more to do if outside
+                shl     ctmp, #8
+                rev     sprt
 
-                test    sprt, a     wz          ' check pixel visibility
-
-                cmps    x, #0       wc          ' check pixel outside left border
-  if_nc_and_nz  wrbyte  ctmp, ptra              ' overwrite if visible
-                add     ptra, #1                ' move to next location
-                add     x, #1
-
-.mag            skip    #%1111
-                cmps    x, #0       wc          ' check pixel outside left border
-  if_nc_and_nz  wrbyte  ctmp, ptra              ' overwrite if visible
-                add     ptra, #1                ' move to next location
-                add     x, #1
-
-                shr     a, #1
-                djnz    ecnt, #.draw
-.end_draw
+.draw           getnib  a, sprt, #0
+                mergew  a
+                mov     cbuf+0, ctmp
+                movbyts cbuf+0, a
+                wmlong  cbuf+0, ptra++
+                add     x, #4
+                cmp     x, #256     wc
+                shr     sprt, #4    wz
+    if_c_and_nz djnz    ecnt, #.draw
 
                 sub     vcnt, #1    wz          ' limit sprites on scanline
     if_z        jmp     #end_scanline
@@ -427,6 +421,10 @@ end_scanline
                 incmod  loff, #7
                 incmod  lcnt, #192-1
                 jmp     #loop
+
+t1              long    0
+t2              long    0
+tmax            long    0
 '
 '
 ' Field loop
