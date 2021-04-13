@@ -8,10 +8,15 @@ CON
   intensity     = 80    '0..128
   fpix          = 12_500_000
 
+VAR
+
+    byte  status
+
 PUB start(tms_regs, tms_vram, bitmap, pin)
 
     _pn  := pin & $38
 
+    _tms_status := @status
     _tms_regs := tms_regs
     _tms_vram := tms_vram
     _tms_first := 24
@@ -20,6 +25,11 @@ PUB start(tms_regs, tms_vram, bitmap, pin)
     _tms_palette := @tms_palette
 
     coginit(16, @driver, 0)
+
+PUB get_status() : rc
+
+    rc := status
+    status := 0
 
 DAT             orgh
 
@@ -283,6 +293,19 @@ sprites
                 mov     vcnt, #4                ' sprite scanline limit
                 mov     ccnt, #TMSSPRITES       ' number of sprites
 
+                rdbyte  stat, _tms_status
+
+                mov     line-1, #0              ' clear collision buffer
+                mov     line+0, #0
+                mov     line+1, #0
+                mov     line+2, #0
+                mov     line+3, #0
+                mov     line+4, #0
+                mov     line+5, #0
+                mov     line+6, #0
+                mov     line+7, #0
+                mov     line+8, #0
+
                 sets    .loop, #sbuf
 
                 mov     b, #8
@@ -348,6 +371,30 @@ sprites
     if_nz       mergew  sprt
     if_z        shl     sprt, #16
 
+                mov     cbuf, sprt
+                mov     cbuf+1, cbuf
+
+                mov     y, x                    ' check sprite collision
+                sar     y, #5                   ' |
+                add     y, #line                ' |
+                setd    .c0, y                  ' |
+                setd    .c0+1, y                ' |
+                add     y, #1                   ' |
+                setd    .c1, y                  ' |
+                setd    .c1+1, y                ' |
+                mov     a, x                    ' |
+                and     a, #$1F     wz          ' |
+    if_z        mov     cbuf+1, #0              ' |
+                shr     cbuf, a                 ' |
+.c0             test    0-0, cbuf   wz          ' |
+                or      0-0, cbuf               ' |
+                mov     y, #32                  ' |
+                sub     y, a                    ' |
+                shl     cbuf+1,y                ' |
+.c1 if_z        test    0-0, cbuf+1 wz          ' |
+                or      0-0, cbuf+1             ' |
+    if_nz       or      stat, #%0010_0000       ' update collision flag
+
                 cmps    x, #0       wc
     if_c        abs     x
     if_c        add     ptra, x
@@ -373,10 +420,13 @@ sprites
 
 .next           djnz    ccnt, #.loop
 
+                wrbyte  stat, _tms_status
+
 end_scanline
                 add     ptrv, #256
                 incmod  loff, #7
                 incmod  lcnt, #192-1
+
                 jmp     #loop
 '
 '
@@ -501,6 +551,7 @@ _lb             long    0                       'line buffer pointer
 _cl             long    0                       'current line
 _pn             long    0                       'base pin
 
+_tms_status     long    0
 _tms_regs       long    0
 _tms_vram       long    0
 _tms_first      long    0
@@ -536,8 +587,12 @@ ptrc            res     1
 ptrd            res     1
 ptrv            res     1
 
+stat            res     1
 regs            res     8
 sbuf            res     32
+                res     1
+line            res     8
+                res     1
 
                 fit     $1F0
 
