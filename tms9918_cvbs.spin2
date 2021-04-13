@@ -421,10 +421,6 @@ end_scanline
                 incmod  loff, #7
                 incmod  lcnt, #192-1
                 jmp     #loop
-
-t1              long    0
-t2              long    0
-tmax            long    0
 '
 '
 ' Field loop

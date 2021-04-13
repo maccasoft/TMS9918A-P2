@@ -1,5 +1,5 @@
 {
-    TMS9918 Renderer Example
+    TMS9918 Emulation Example
     Written by Marco Maccaferri <macca@maccasoft.com>
 }
 CON
@@ -13,14 +13,16 @@ VAR
 OBJ
 
     tms   : "tms9918_cvbs"
+    'tms   : "tms9918_vga"
 
 PUB main() | addr, back
 
-    debug(`BITMAP TMS9918 POS 50 50 SIZE 320 240 DOTSIZE 2 LUT8 LONGS_8BIT)
+    debug(`BITMAP TMS9918 POS 1250 50 SIZE 320 240 DOTSIZE 2 LUT8 LONGS_8BIT)
     debug(`TMS9918 LUTCOLORS $00_00_00 $00_00_00 $20_C0_20 $60_E0_60 $20_20_E0 $40_60_E0 $A0_20_20 $40_C0_E0 $E0_20_20 $E0_60_60 $C0_C0_20 $C0_C0_80 $20_80_20 $C0_40_A0 $A0_A0_A0 $E0_E0_E0)
 
     tms.start(0, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' NTSC
     'tms.start(1, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' PAL
+    'tms.start(@tms_regs, @tms_vram, @tms_bitmap, 8)   ' VGA
 
     addr := @tms_bitmap
     back := byte[@tms_regs][7] & $0F

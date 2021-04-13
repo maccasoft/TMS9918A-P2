@@ -6,8 +6,10 @@
     Nyan Cat images from Passan Kiskat by Dromedaar Vision: http://www.dromedaar.com/
 }
 CON
-    _clkfreq    = 160_000_000
-    video_pin   = 32+7*3 addpins 1
+    _clkfreq     = 160_000_000
+
+    cvbs_pin     = 32+7*3 addpins 1
+    vga_pin_base = 8
 
     ' color constants
 
@@ -40,6 +42,7 @@ VAR
 OBJ
 
     tms   : "tms9918_cvbs"
+    'tms   : "tms9918_vga"
 
 PUB main()
 
@@ -47,13 +50,14 @@ PUB main()
     TICKCOUNTER := FRAMETICKS
     CURRFRAME := 0
 
-    tms.start(0, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' NTSC
-    'tms.start(1, @tms_regs, @tms_vram, @tms_bitmap, video_pin)   ' PAL
+    tms.start(0, @tms_regs, @tms_vram, @tms_bitmap, cvbs_pin)   ' NTSC
+    'tms.start(1, @tms_regs, @tms_vram, @tms_bitmap, cvbs_pin)   ' PAL
+    'tms.start(@tms_regs, @tms_vram, @tms_bitmap, vga_pin_base)   ' VGA
 
     repeat
+        slide()
         nyan()
         sprite()
-        slide()
 
 PUB nyan() | addr, ri, ra
 
@@ -88,9 +92,7 @@ PUB nyan() | addr, ri, ra
         if addr >= @ANIMATION_END
             addr := @ANIMATION
 
-DAT
-
-                orgh
+DAT             orgh
 
 ' register values for multicolor mode
 TMSMCREG
@@ -165,9 +167,7 @@ PUB sprite()
         bytemove(@tms_vram + $3B00, @SPRITE1Y, 12)
         TICKCOUNTER--
 
-DAT
-
-                orgh
+DAT             orgh
 
 ' register values for multicolor mode
 TMSBITMAPREG
@@ -282,24 +282,36 @@ WORLD7          byte   007, 019, 033, 065, 099, 114, 059, 063
                 byte   000, 000, 000, 096, 048, 006, 143, 015
                 byte   031, 127, 254, 248, 112, 032, 000, 000
 
-PUB slide() | regp, vramp
+PUB slide() | regsp, vramp
 
-    regp := @tms9918_regs
+    regsp := @tms9918_regs
     vramp := @tms9918_vram
 
-    repeat 3
-        waitatn()
-        longmove(@tms_regs, regp, 2)
-        longmove(@tms_vram, vramp, 4096)
+    waitatn()
+    waitatn()
+    bytemove(@tms_regs, regsp, 8)
+    bytemove(@tms_vram, vramp, 16384)
+    regsp += 8
+    vramp += 16384
+    waitms(10_000)
 
-        regp += 8
-        vramp += 16384
+    waitatn()
+    waitatn()
+    bytemove(@tms_regs, regsp, 8)
+    bytemove(@tms_vram, vramp, 16384)
+    regsp += 8
+    vramp += 16384
+    waitms(10_000)
 
-        waitms(10_000)
+    waitatn()
+    waitatn()
+    bytemove(@tms_regs, regsp, 8)
+    bytemove(@tms_vram, vramp, 16384)
+    regsp += 8
+    vramp += 16384
+    waitms(10_000)
 
-DAT
-
-                orgh
+DAT             orgh
 
 tms9918_regs
                 file    "tms9918_ascii.regs"
