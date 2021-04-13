@@ -399,7 +399,9 @@ sprites
     if_c        abs     x
     if_c        add     ptra, x
     if_c        sub     ecnt, x
-    if_c        shl     sprt, x
+    if_c        cmps    x, #32      wz
+    if_c_and_z  mov     sprt, #0
+    if_c_and_nz shl     sprt, x
     if_c        mov     x, #0
 
                 shl     ctmp, #8
