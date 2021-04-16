@@ -368,14 +368,11 @@ draw_sprite
     if_nz       shr     a, #1
                 add     ptrc, a
 
-                mov     ctmp, sprt              ' set pixel color
-                shr     ctmp, #24
+                getbyte ctmp, sprt, #3
                 and     ctmp, #$0F          wz
     if_z        setnib  ctmp, regs+7, #0
 
-                mov     x, sprt
-                shr     x, #8
-                and     x, #$FF
+                getbyte x, sprt, #1
                 testbn  sprt, #31           wz  'TMSEARLYCLK
     if_nz       sub     x, #32
                 mov     ptra, ptrv
