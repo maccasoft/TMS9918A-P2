@@ -290,29 +290,23 @@ graphics_mode
                 ' fall through
 
 sprites
-                mov     vcnt, #4                ' sprite scanline limit
-                mov     ccnt, #TMSSPRITES       ' number of sprites
-
-                rdbyte  stat, _tms_status
-
-                mov     line-1, #0              ' clear collision buffer
-                mov     line+0, #0
-                mov     line+1, #0
-                mov     line+2, #0
-                mov     line+3, #0
-                mov     line+4, #0
-                mov     line+5, #0
-                mov     line+6, #0
-                mov     line+7, #0
-                mov     line+8, #0
-
-                sets    .loop, #sbuf
-
                 mov     b, #8
                 test    regs+1, #TMSSPRSIZE wz
     if_nz       shl     b, #1
                 test    regs+1, #TMSSPRMAG  wz
     if_nz       shl     b, #1
+
+sort_priority
+                sets    .loop, #sbuf
+                setd    .wr, #vbuf+3
+
+                mov     ecnt, #14
+.l1             altd    ecnt, #vbuf-1
+                mov     0-0, #0
+                djnz    ecnt, #.l1
+
+                mov     vcnt, #0
+                mov     ccnt, #TMSSPRITES       ' number of sprites
 
 .loop           mov     sprt, sbuf
                 add     .loop, #1
@@ -326,14 +320,45 @@ sprites
                 cmps    y, neg_clip wc
     if_c        and     y, #$FF                 ' max -32
                 cmp     y, #$D0 wz              ' end of sprites processing
-    if_z        jmp     #end_scanline
+    if_z        jmp     #.next+1
 
                 mov     a, lcnt                 ' check sprite scanline visibility
                 subs    a, y    wc
     if_c        jmp     #.next
                 cmp     a, b    wc
     if_nc       jmp     #.next
+                setbyte sprt, a, #0
 
+                incmod  vcnt, #4    wc          ' limit sprites on scanline
+    if_c        jmp     #.next+1
+
+.wr             mov     vbuf, sprt
+                sub     .wr, ##1<<9
+
+.next           djnz    ccnt, #.loop
+
+                rdbyte  stat, _tms_status
+
+                mov     sprt, vbuf+0    wz
+    if_nz       calld   draw_sprite_ret, #draw_sprite
+                mov     sprt, vbuf+1    wz
+    if_nz       calld   draw_sprite_ret, #draw_sprite
+                mov     sprt, vbuf+2    wz
+    if_nz       calld   draw_sprite_ret, #draw_sprite
+                mov     sprt, vbuf+3    wz
+    if_nz       calld   draw_sprite_ret, #draw_sprite
+
+                wrbyte  stat, _tms_status
+
+end_scanline
+                add     ptrv, #256
+                incmod  loff, #7
+                incmod  lcnt, #192-1
+
+                jmp     #loop
+
+draw_sprite
+                getbyte a, sprt, #0
                 mov     ptrc, sprt
                 shr     ptrc, #16
                 and     ptrc, #$FF
@@ -351,7 +376,7 @@ sprites
                 mov     x, sprt
                 shr     x, #8
                 and     x, #$FF
-                test    sprt, TMSEARLYCLK   wz
+                testbn  sprt, #31           wz  'TMSEARLYCLK
     if_nz       sub     x, #32
                 mov     ptra, ptrv
                 add     ptra, x
@@ -417,19 +442,8 @@ sprites
                 shr     sprt, #4    wz
     if_c_and_nz djnz    ecnt, #.draw
 
-                sub     vcnt, #1    wz          ' limit sprites on scanline
-    if_z        jmp     #end_scanline
-
-.next           djnz    ccnt, #.loop
-
-                wrbyte  stat, _tms_status
-
-end_scanline
-                add     ptrv, #256
-                incmod  loff, #7
-                incmod  lcnt, #192-1
-
-                jmp     #loop
+                jmp     draw_sprite_ret
+draw_sprite_ret long    0
 '
 '
 ' Field loop
@@ -564,7 +578,6 @@ _tms_palette    long    0
 vdp_8k_mask     long    $1FFF
 neg_clip        long    -32
 
-TMSEARLYCLK     long    %10000000_00000000_00000000_00000000
 TMSSPRCOLOR     long    %00001111_00000000_00000000_00000000
 
 a               res     1
@@ -582,7 +595,7 @@ vcnt            res     1
 ecnt            res     1
 
 ctmp            res     1
-cbuf            res     4
+cbuf            res     2
 sprt            res     1
 
 ptrc            res     1
@@ -592,6 +605,8 @@ ptrv            res     1
 stat            res     1
 regs            res     8
 sbuf            res     32
+
+vbuf            res     4
                 res     1
 line            res     8
                 res     1
