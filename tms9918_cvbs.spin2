@@ -359,9 +359,6 @@ sort_priority
 .loop           mov     sprt, sbuf
                 add     .loop, #1
 
-                test    sprt, TMSSPRCOLOR wz    ' check sprite color
-    if_z        jmp     #.next                  ' skip if transparent
-
                 mov     y, sprt
                 shl     y, #24
                 sar     y, #24                  ' sign-extend y
