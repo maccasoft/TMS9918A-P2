@@ -5,8 +5,8 @@
 }
 CON
 
-  intensity     = 80    '0..128
-  fpix          = 12_500_000
+    intensity   = 80    '0..128
+    fpix        = 12_500_000
 
 VAR
 
@@ -296,20 +296,16 @@ sprites
                 test    regs+1, #TMSSPRMAG  wz
     if_nz       shl     b, #1
 
-sort_priority
-                sets    .loop, #sbuf
-                setd    .wr, #vbuf+3
-
                 mov     ecnt, #14
 .l1             altd    ecnt, #vbuf-1
                 mov     0-0, #0
                 djnz    ecnt, #.l1
 
                 mov     vcnt, #0
-                mov     ccnt, #TMSSPRITES       ' number of sprites
+                mov     ccnt, #0
 
-.loop           mov     sprt, sbuf
-                add     .loop, #1
+.loop           alts    ccnt, #sbuf
+                mov     sprt, 0-0
 
                 mov     y, sprt
                 shl     y, #24
@@ -326,23 +322,23 @@ sort_priority
     if_nc       jmp     #.next
                 setbyte sprt, a, #0
 
-                incmod  vcnt, #4    wc          ' limit sprites on scanline
+                altd    vcnt, #vbuf
+                mov     0-0, sprt
+                incmod  vcnt, #3    wc          ' limit sprites on scanline
     if_c        jmp     #.next+1
 
-.wr             mov     vbuf, sprt
-                sub     .wr, ##1<<9
-
-.next           djnz    ccnt, #.loop
+.next           incmod  ccnt, #TMSSPRITES-1 wc
+    if_nc       jmp     #.loop
 
                 rdbyte  stat, _tms_status
 
-                mov     sprt, vbuf+0    wz
-    if_nz       calld   draw_sprite_ret, #draw_sprite
-                mov     sprt, vbuf+1    wz
+                mov     sprt, vbuf+3    wz
     if_nz       calld   draw_sprite_ret, #draw_sprite
                 mov     sprt, vbuf+2    wz
     if_nz       calld   draw_sprite_ret, #draw_sprite
-                mov     sprt, vbuf+3    wz
+                mov     sprt, vbuf+1    wz
+    if_nz       calld   draw_sprite_ret, #draw_sprite
+                mov     sprt, vbuf+0    wz
     if_nz       calld   draw_sprite_ret, #draw_sprite
 
                 wrbyte  stat, _tms_status
@@ -365,9 +361,8 @@ draw_sprite
     if_nz       shr     a, #1
                 add     ptrc, a
 
-                getbyte ctmp, sprt, #3
-                and     ctmp, #$0F          wz
-    if_z        setnib  ctmp, regs+7, #0
+                getnib  ctmp, sprt, #6          'set sprite color
+                shl     ctmp, #8
 
                 getbyte x, sprt, #1
                 testbn  sprt, #31           wz  'TMSEARLYCLK
@@ -423,7 +418,6 @@ draw_sprite
     if_c_and_nz shl     sprt, x
     if_c        mov     x, #0
 
-                shl     ctmp, #8
                 rev     sprt
 
 .draw           getnib  a, sprt, #0
