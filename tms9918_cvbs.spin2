@@ -145,25 +145,22 @@ loop
     if_z        jmp     #loop
 
                 mov     scol, scol+1
-
-                mov     ptra, _tms_regs
-
-                rdbyte  regs+7, ptra[7]
-                mov     a, regs+7
-                and     a, #$0F
-                movbyts a, #0
-                mov     scol+1, a
-
                 mov     scnt, _cl
 
-                cmp     _cl, _tms_first  wcz   ' wait for frame sync
-    if_c        jmp     #loop
-                cmp     _cl, _tms_last   wc
-    if_nc       jmp     #loop
-    if_nz       jmp     #scanline
-
-                setq    #1                      ' read regs into temp buffer
+                setq    #1                      ' read registers into temp buffer
                 rdlong  sbuf, _tms_regs         ' |
+
+                getnib  scol+1, sbuf+1, #6      ' border color for next line
+                movbyts scol+1, #0
+
+                cmp     _cl, _tms_first  wcz    ' check if first visible line
+    if_c        jmp     #loop
+                cmp     _cl, _tms_last   wc     ' check if last visible line
+    if_nc       jmp     #loop
+
+    if_z        mov     loff, #0                ' if first line reset counters...
+    if_z        mov     lcnt, #0
+    if_z        mov     ptrv, _tms_bitmap       ' ...and pointers
 
                 getbyte regs+0, sbuf, #0
                 test    regs+0, #TMSMODE3    wz ' graphics mode II
@@ -190,12 +187,16 @@ loop
                 setq    #32-1                   ' read all sprite attribute table
                 rdlong  sbuf, regs+5
 
-                mov     loff, #0
-                mov     lcnt, #0
-                mov     ptrv, _tms_bitmap
-
 scanline
                 mov     ptra, ptrv
+
+                test    regs+1, #TMSMODE1    wz ' text mode
+                mov     a, lcnt
+                andn    a, #$07                 ' divide and multiply by 8
+                mov     b, a
+                shl     a, #2                   ' multiply by 32
+    if_nz       add     a, b                    ' multiply by 40
+                add     regs+2, a
 
                 test    regs+1, #TMSMODE2    wz ' multicolor mode
     if_nz       jmp     #multicolor_mode
@@ -204,15 +205,13 @@ scanline
     if_z        jmp     #graphics_mode
 
 text_mode
-                mov     ctmp, regs+7            ' background color
-                and     ctmp, #$0F
-                mov     a, regs+7               ' foreground color
-                shr     a, #4
-                setbyte ctmp, a, #1
+                getnib  ctmp, regs+7, #1        ' foreground color
+                shl     ctmp, #8
+                setnib  ctmp, regs+7, #0        ' background color
 
                 mov     cbuf+0, ctmp
                 movbyts cbuf+0, #0
-                wrlong  cbuf+0, ptra++
+                setq    #1
                 wrlong  cbuf+0, ptra++
 
                 mov     ptrb, regs+2
@@ -241,11 +240,8 @@ text_mode
 
                 mov     cbuf+0, ctmp
                 movbyts cbuf+0, #0
+                setq    #1
                 wrlong  cbuf+0, ptra++
-                wrlong  cbuf+0, ptra++
-
-                cmp     loff, #7        wz
-    if_z        add     regs+2, #40
 
                 jmp     #end_scanline
 
@@ -277,9 +273,6 @@ multicolor_mode
                 wrlong  cbuf+0, ptra++
 
                 djnz    ecnt, #.loop
-
-                cmp     loff, #7        wz
-    if_z        add     regs+2, #32
 
                 jmp     #sprites
 
@@ -331,9 +324,6 @@ graphics_mode
                 wrlong  cbuf+0, ptra++
 
                 djnz    ecnt, #.loop
-
-                cmp     loff, #7        wz
-    if_z        add     regs+2, #32
 
                 ' fall through
 
