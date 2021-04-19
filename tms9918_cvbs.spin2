@@ -90,8 +90,8 @@ PUB start(pal, tms_regs, tms_vram, bitmap, pin) | x_total, dotf, dotps, i
 
 PUB get_status() : rc
 
-    rc := status
-    status := 0
+    if (rc := status) <> 0
+        status := 0
 
 DAT             orgh
 
@@ -334,11 +334,12 @@ sprites
                 test    regs+1, #TMSSPRMAG  wz
     if_nz       shl     b, #1
 
-                mov     ecnt, #14
+                mov     ecnt, #14               ' clear buffers
 .l1             altd    ecnt, #vbuf-1
                 mov     0-0, #0
                 djnz    ecnt, #.l1
 
+                mov     stat, #0
                 mov     vcnt, #0
                 mov     ccnt, #0
 
@@ -351,7 +352,7 @@ sprites
                 cmps    y, neg_clip wc
     if_c        and     y, #$FF                 ' max -32
                 cmp     y, #$D0 wz              ' end of sprites processing
-    if_z        jmp     #.next+1
+    if_z        jmp     #.end
 
                 mov     a, lcnt                 ' check sprite scanline visibility
                 subs    a, y    wc
@@ -360,15 +361,17 @@ sprites
     if_nc       jmp     #.next
                 setbyte sprt, a, #0
 
-                altd    vcnt, #vbuf
+                incmod  vcnt, #4    wc          ' limit sprites on scanline
+    if_c        mov     stat, ccnt              ' set 5th sprite
+    if_c        or      stat, #%010_00000
+    if_c        jmp     #.end
+
+                altd    vcnt, #vbuf-1
                 mov     0-0, sprt
-                incmod  vcnt, #3    wc          ' limit sprites on scanline
-    if_c        jmp     #.next+1
 
 .next           incmod  ccnt, #TMSSPRITES-1 wc
     if_nc       jmp     #.loop
-
-                rdbyte  stat, _tms_status
+.end
 
                 mov     sprt, vbuf+3    wz
     if_nz       calld   draw_sprite_ret, #draw_sprite
@@ -379,7 +382,12 @@ sprites
                 mov     sprt, vbuf+0    wz
     if_nz       calld   draw_sprite_ret, #draw_sprite
 
-                wrbyte  stat, _tms_status
+                rdbyte  a, _tms_status          ' update status byte
+                test    stat, #%001_00000  wz
+    if_nz       or      a, #%001_00000
+                test    a, #%010_00000     wz
+    if_z        or      a, stat
+                wrbyte  a, _tms_status
 
 end_scanline
                 add     ptrv, #256
@@ -505,11 +513,11 @@ field
                 xcont   _ac, #1
 
                 resi1
-                xcont   _bv, scol          'before-visible spacer
+                xcont   _bv, scol               'before-visible spacer
                 resi1
                 xcont   _dv, #0                 'visible line
                 resi1
-                xcont   _av, scol          'after-visible spacer
+                xcont   _av, scol               'after-visible spacer
                 resi1
 
                 incmod  cx, #y_pixels-1 wc      'another line?
@@ -518,7 +526,9 @@ field
                 mov     cx, _al         wz      'after-visible blank lines
                 calld   blank_ret, #blank
 
-                drvnot  #1
+                rdbyte  cy, _tms_status         ' update status byte
+                or      cy, #%100_00000
+                wrbyte  cy, _tms_status
                 cogatn  #%00000001              'signal vertical sync to cog0
 
                 test    _md, #%010      wc      'toggle field?
