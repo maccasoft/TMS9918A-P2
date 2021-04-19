@@ -523,13 +523,13 @@ field
                 incmod  cx, #y_pixels-1 wc      'another line?
         if_nc   jmp     #.line
 
-                mov     cx, _al         wz      'after-visible blank lines
-                calld   blank_ret, #blank
-
                 rdbyte  cy, _tms_status         ' update status byte
-                or      cy, #%100_00000
+                or      cy, #%100_00000         ' vsync flag
                 wrbyte  cy, _tms_status
                 cogatn  #%00000001              'signal vertical sync to cog0
+
+                mov     cx, _al         wz      'after-visible blank lines
+                calld   blank_ret, #blank
 
                 test    _md, #%010      wc      'toggle field?
         if_c    xor     _md, #%001

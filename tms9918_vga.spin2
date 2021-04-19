@@ -475,13 +475,13 @@ field
                 resi1
                 djnz    cy,#.line
 
+                rdbyte  cy, _tms_status         ' update status byte
+                or      cy, #%100_00000         ' vsync flag
+                wrbyte  cy, _tms_status
+                cogatn  #%00000001              'signal vertical sync to cog0
+
                 mov     cy,#24                  'after-visible blank lines
                 calld   border_ret, #border
-
-                rdbyte  cy, _tms_status         ' update status byte
-                or      cy, #%100_00000
-                wrbyte  cy, _tms_status         ' update status byte
-                cogatn  #%00000001              ' signal vertical sync to cog0
 
                 mov     cy, #10
                 calld   blank_ret, #blank
