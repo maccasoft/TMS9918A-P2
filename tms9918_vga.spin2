@@ -142,6 +142,9 @@ loop
 scanline
                 mov     ptra, ptrv
 
+                test    regs+1, #TMSBLANK    wz ' blank
+    if_z        jmp     #blank_line
+
                 test    regs+1, #TMSMODE1    wz ' text mode
                 mov     a, lcnt
                 andn    a, #$07                 ' divide and multiply by 8
@@ -194,6 +197,16 @@ text_mode
                 movbyts cbuf+0, #0
                 setq    #1
                 wrlong  cbuf+0, ptra++
+
+                jmp     #end_scanline
+
+blank_line
+                getnib  ctmp, regs+7, #0        ' background color
+                movbyts ctmp, #0
+
+                mov     ecnt, #256/4            ' fill line with background
+.l1             wrlong  ctmp, ptra++
+                djnz    ecnt, #.l1
 
                 jmp     #end_scanline
 
