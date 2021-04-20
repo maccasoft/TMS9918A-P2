@@ -444,14 +444,14 @@ draw_sprite
     if_nz       mergew  sprt
     if_z        shl     sprt, #16
 
-                cmps    x, #0       wc
-    if_c        abs     x
-    if_c        add     ptra, x
-    if_c        sub     ecnt, x
-    if_c        cmps    x, #32      wz
-    if_c_and_z  mov     sprt, #0
-    if_c_and_nz shl     sprt, x
-    if_c        mov     x, #0
+                cmps    x, #0       wc          ' skip left offscreen pixels
+    if_c        abs     x                       ' |
+    if_c        add     ptra, x                 ' |
+    if_c        sub     ecnt, x                 ' |
+    if_c        cmps    x, #32      wz          ' |
+    if_c_and_z  mov     sprt, #0                ' |
+    if_c_and_nz shl     sprt, x                 ' |
+    if_c        mov     x, #0                   ' |
 
                 mov     cbuf, sprt
                 mov     cbuf+1, cbuf
@@ -476,6 +476,7 @@ draw_sprite
 .c1 if_z        test    0-0, cbuf+1 wz          ' |
                 or      0-0, cbuf+1             ' |
     if_nz       or      stat, #%0010_0000       ' update collision flag
+                mov     line+8, #0              ' clear right offscreen pixels
 
                 rev     sprt
 
@@ -693,7 +694,6 @@ sbuf            res     32
 vbuf            res     4
                 res     1
 line            res     8
-                res     1
 
                 fit     $1F0
 
