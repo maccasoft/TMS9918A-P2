@@ -21,7 +21,7 @@ PUB start(tms_regs, tms_vram, bitmap, pin)
     _tms_vram := tms_vram
     _tms_first := 24
     _tms_last := _tms_first + 192
-    _tms_bitmap := @bitmap
+    _tms_bitmap := bitmap
     _tms_palette := @tms_palette
 
     coginit(16, @driver, 0)
