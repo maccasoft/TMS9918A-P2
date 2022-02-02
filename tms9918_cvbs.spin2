@@ -13,7 +13,7 @@ CON
 
 VAR
 
-    byte  status
+    long  status
 
 PUB start(pal, tms_regs, tms_vram, bitmap, pin) | x_total, dotf, dotps, i
 
@@ -274,9 +274,9 @@ multicolor_mode
                 rdbyte  cbuf+0, ptrc            ' colors
 
                 mov     cbuf+1, cbuf+0
-                and     cbuf+1, #$0F wz
+                and     cbuf+1, #$0F        wz
     if_z        setnib  cbuf+1, regs+7, #0
-                shr     cbuf+0, #4   wz
+                shr     cbuf+0, #4          wz
     if_z        setnib  cbuf+0, regs+7, #0
 
                 movbyts cbuf+0, #%%0000
@@ -290,14 +290,13 @@ multicolor_mode
                 jmp     #sprites
 
 graphics_mode
-                test    regs+0, #TMSMODE3    wz ' graphics mode II
+                test    regs+0, #TMSMODE3   wz  ' graphics mode II
     if_nz       mov     a, lcnt
     if_nz       shr     a, #6                   ' divide by 64 (8 rows by 8 pixels)
     if_nz       shl     a, #11                  ' multiply by 2048
                 mov     b, loff                 ' offset into pattern table
     if_nz       add     b, a                    ' add mode II pattern table offset
 
-                test    regs+0, #TMSMODE3 wz    ' graphics mode II
                 bitnz   .shlr, #21              ' patch shl(0)/shr(1)
 
                 mov     ptrb, regs+2
@@ -308,14 +307,15 @@ graphics_mode
                 mov     ptrd, ptrc
 .shlr           shl     ptrd, #3
                 add     ptrd, regs+3            ' points to color table
-                add     ptrd, b
+                test    regs+0, #TMSMODE3   wz  ' graphics mode II
+    if_nz       add     ptrd, b
                 rdbyte  a, ptrd                 ' colors
 
                 getnib  cbuf+0, a, #0
-                and     cbuf+0, #$0F wz
+                and     cbuf+0, #$0F        wz
     if_z        setnib  cbuf+0, regs+7, #0
                 getnib  cbuf+1, a, #1
-                and     cbuf+1, #$0F wz
+                and     cbuf+1, #$0F        wz
     if_z        setnib  cbuf+1, regs+7, #0
 
                 setbyte cbuf+0, cbuf+1, #1
@@ -364,13 +364,13 @@ sprites
                 sar     y, #24                  ' sign-extend y
                 cmps    y, neg_clip wc
     if_c        and     y, #$FF                 ' max -32
-                cmp     y, #$D0 wz              ' end of sprites processing
+                cmp     y, #$D0     wz          ' end of sprites processing
     if_z        jmp     #.end
 
                 mov     a, lcnt                 ' check sprite scanline visibility
-                subs    a, y    wc
+                subs    a, y        wc
     if_c        jmp     #.next
-                cmp     a, b    wc
+                cmp     a, b        wc
     if_nc       jmp     #.next
                 setbyte sprt, a, #0
 
@@ -396,9 +396,9 @@ sprites
     if_nz       calld   draw_sprite_ret, #draw_sprite
 
                 rdbyte  a, _tms_status          ' update status byte
-                test    stat, #%001_00000  wz
+                test    stat, #%001_00000   wz
     if_nz       or      a, #%001_00000
-                test    a, #%010_00000     wz
+                test    a, #%010_00000      wz
     if_z        or      a, stat
                 wrbyte  a, _tms_status
 
